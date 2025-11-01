@@ -40,8 +40,6 @@ python scripts/05_utils/test_firebase_connection.py
 python scripts/04_testing/test_model_agnostic_editing.py
 ```
 
-**📚 Need help with Firebase?** See [FIREBASE_SETUP.md](FIREBASE_SETUP.md) for detailed instructions.
-
 **First-time users**: The script will detect missing data and offer to initialize automatically (takes ~2-5 hours).
 
 **Existing users**: If you already have data, it will start immediately.
