@@ -266,4 +266,4 @@ For Firebase credentials or questions about the project:
 
 ## 🔗 Related Projects
 
-- [WorldCCUB App](https://github.com/cmubig/worldccub-app) - Crowdsourcing platform for cultural data collection
+- [WorldCCUB App](https://github.com/cmubig/WorldCCUB) - Crowdsourcing platform for cultural data collection
