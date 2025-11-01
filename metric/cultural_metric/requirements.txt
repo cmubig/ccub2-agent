@@ -1,0 +1,9 @@
+pypdf>=4.2.0
+sentence-transformers>=2.7.0
+faiss-cpu>=1.7.4
+tqdm>=4.66.0
+transformers>=4.45.0
+accelerate>=0.34.0
+optimum>=1.19.0
+Pillow>=10.2.0
+torch>=2.1.0

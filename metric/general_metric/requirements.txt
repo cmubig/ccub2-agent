@@ -1,0 +1,8 @@
+torch>=2.0.0
+torchvision>=0.15.0
+git+https://github.com/openai/CLIP.git
+dreamsim>=0.1.0
+timm>=0.9.0
+pillow>=9.0.0
+pandas>=1.5.0
+huggingface_hub>=0.15.0

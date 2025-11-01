@@ -1,0 +1,34 @@
+# Cleanup Summary (2025-10-31)
+
+## Removed from /home/chans/ccub2-agent/
+- data/country_packs/  (30 images, moved to scratch)
+- outputs/ (test images)
+- experiments/ (empty)
+- uploader/ (HTML/JS, not needed)
+- *.log files → moved to logs/
+- deploy scripts → moved to archive/
+- __pycache__/ (Python cache)
+- .ipynb_checkpoints/
+- ccub2_agent.egg-info/
+
+## Moved to docs/
+- 19 .md documentation files
+
+## Current Structure
+/home/chans/ccub2-agent/  (CODE ONLY)
+├── scripts/      ← Work here
+├── ccub2_agent/  ← Core code
+├── metric/       ← Metric code  
+├── docs/         ← Documentation
+├── tests/        ← Tests
+├── examples/     ← Examples
+├── archive/      ← Old deploy scripts
+├── logs/         ← Test logs
+└── [root files]  ← README, requirements, setup
+
+/scratch/chans/ccub2-agent-data/  (DATA ONLY)
+├── country_packs/korea/
+├── cultural_index/korea/
+├── clip_index/korea/
+└── cultural_knowledge/  (NEW)
+

@@ -1,0 +1,95 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+ccub2/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Config files with secrets
+config/firebase-config.json
+config/*.key
+config/*.pem
+.env
+.firebase_config.json
+*firebase*config*.json
+firebase-service-account.json
+*service-account*.json
+
+# Data
+data/country_packs/*/approved_dataset.json
+data/country_packs/*/images/
+data/benchmarks/
+output/
+outputs/
+experiments/
+logs/
+*.log
+
+# Large data in scratch (NOT in repo!)
+/scratch/
+
+# Models (locally stored)
+models/*.pth
+models/*.pt
+models/*.bin
+models/*.safetensors
+checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Deployment
+ccub2-agent.tar.gz
+*.tar.gz
+
+# Hugging Face cache (don't commit)
+.cache/
+*.lock

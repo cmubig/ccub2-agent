@@ -1,0 +1,17 @@
+{
+  "country": "korea",
+  "model": "openai/clip-vit-base-patch32",
+  "dimension": 512,
+  "num_images": 328,
+  "categories": [
+    "urban",
+    "traditional_clothing",
+    "people",
+    "architecture",
+    "nature",
+    "festivals",
+    "arts",
+    "uncategorized",
+    "food"
+  ]
+}
