@@ -22,7 +22,7 @@ Our system automatically adapts editing instructions to each model's optimal for
 
 ```bash
 # 1. Clone repository
-git clone https://github.com/YOUR_USERNAME/ccub2-agent.git
+[git clone https://github.com/YOUR_USERNAME/ccub2-agent.git](https://github.com/cmubig/ccub2-agent)
 cd ccub2-agent
 
 # 2. Install dependencies
