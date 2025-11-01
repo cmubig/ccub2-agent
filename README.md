@@ -254,10 +254,6 @@ python scripts/extract_cultural_knowledge.py --max-images 5
 
 MIT License - See [LICENSE](LICENSE) file for details.
 
-## 🙏 Acknowledgments
-
-This research was conducted at Carnegie Mellon University.
-
 ## 📧 Contact
 
 For Firebase credentials or questions about the project:
