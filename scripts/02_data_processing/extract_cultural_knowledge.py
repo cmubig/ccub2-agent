@@ -11,6 +11,8 @@ automatically from actual verified images.
 import argparse
 import json
 import logging
+import os
+import multiprocessing as mp
 from pathlib import Path
 from typing import Dict, List, Optional
 from dataclasses import dataclass, asdict
@@ -297,6 +299,62 @@ Be specific and detailed. Focus on visual, verifiable characteristics."""
             return None
 
 
+def process_worker(args_tuple):
+    """
+    Worker function for parallel processing.
+
+    Args:
+        args_tuple: (worker_id, items_chunk, data_dir, output_file, model_name, load_in_4bit, country, gpu_id)
+    """
+    worker_id, items_chunk, data_dir, output_file, model_name, load_in_4bit, country, gpu_id = args_tuple
+
+    # Set GPU for this worker
+    if gpu_id is not None:
+        os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
+        logger.info(f"Worker {worker_id}: Using GPU {gpu_id}")
+
+    # Initialize extractor for this worker
+    extractor = CulturalKnowledgeExtractor(
+        model_name=model_name,
+        load_in_4bit=load_in_4bit
+    )
+
+    extracted_knowledge = []
+
+    for item in tqdm(items_chunk, desc=f"Worker {worker_id}", position=worker_id):
+        item_id = item['id']
+
+        # Get image path
+        image_path = data_dir / item['image_path']
+        if not image_path.exists():
+            logger.warning(f"Worker {worker_id}: Image not found: {image_path}")
+            continue
+
+        # Extract knowledge
+        knowledge = extractor.extract_knowledge(
+            image_path=image_path,
+            item_data=item,
+            country=country
+        )
+
+        if knowledge:
+            extracted_knowledge.append(asdict(knowledge))
+
+    # Save worker output
+    output_data = {
+        'worker_id': worker_id,
+        'country': country,
+        'extracted_count': len(extracted_knowledge),
+        'knowledge': extracted_knowledge
+    }
+
+    with open(output_file, 'w', encoding='utf-8') as f:
+        json.dump(output_data, f, indent=2, ensure_ascii=False)
+
+    logger.info(f"Worker {worker_id}: Completed {len(extracted_knowledge)} items -> {output_file}")
+    return len(extracted_knowledge)
+
+
 def main():
     """Main execution function."""
     parser = argparse.ArgumentParser(
@@ -335,6 +393,24 @@ def main():
         action="store_true",
         help="Resume from existing output file"
     )
+    parser.add_argument(
+        "--start-index",
+        type=int,
+        default=0,
+        help="Start index for chunk processing (for parallel execution)"
+    )
+    parser.add_argument(
+        "--end-index",
+        type=int,
+        default=None,
+        help="End index for chunk processing (for parallel execution)"
+    )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=1,
+        help="Number of parallel workers (default: 1, recommend: 2-4)"
+    )
 
     args = parser.parse_args()
 
@@ -357,10 +433,79 @@ def main():
     items = dataset['items']
     country = dataset_file.parent.name  # 'korea' from path
 
+    # Apply chunk slicing first (for parallel processing)
+    if args.start_index > 0 or args.end_index is not None:
+        end_idx = args.end_index if args.end_index else len(items)
+        items = items[args.start_index:end_idx]
+        logger.info(f"Processing chunk: items [{args.start_index}:{end_idx}] ({len(items)} images)")
+
     if args.max_images:
         items = items[:args.max_images]
         logger.info(f"Limited to {args.max_images} images for testing")
 
+    # Parallel processing with workers
+    if args.num_workers > 1:
+        logger.info(f"Using {args.num_workers} parallel workers")
+
+        # Split items into chunks
+        chunk_size = len(items) // args.num_workers
+        chunks = []
+        for i in range(args.num_workers):
+            start_idx = i * chunk_size
+            end_idx = start_idx + chunk_size if i < args.num_workers - 1 else len(items)
+            chunks.append(items[start_idx:end_idx])
+
+        # Prepare worker arguments
+        worker_args = []
+        num_gpus = torch.cuda.device_count()
+        logger.info(f"Detected {num_gpus} GPUs")
+
+        for i, chunk in enumerate(chunks):
+            gpu_id = i % num_gpus if num_gpus > 0 else None
+            output_file = args.output.parent / f"{args.output.stem}_worker{i}.json"
+            worker_args.append((
+                i,  # worker_id
+                chunk,  # items_chunk
+                args.data_dir,  # data_dir
+                output_file,  # output_file
+                args.model_name,  # model_name
+                args.load_in_4bit,  # load_in_4bit
+                country,  # country
+                gpu_id  # gpu_id
+            ))
+
+        # Run workers in parallel
+        with mp.Pool(processes=args.num_workers) as pool:
+            results = pool.map(process_worker, worker_args)
+
+        # Merge results
+        logger.info("Merging worker outputs...")
+        extracted_knowledge = []
+        for i in range(args.num_workers):
+            worker_file = args.output.parent / f"{args.output.stem}_worker{i}.json"
+            if worker_file.exists():
+                with open(worker_file) as f:
+                    worker_data = json.load(f)
+                    extracted_knowledge.extend(worker_data.get('knowledge', []))
+                # Optionally remove worker files
+                # worker_file.unlink()
+
+        # Save merged output
+        output_data = {
+            'country': country,
+            'total_items': len(items),
+            'extracted_count': len(extracted_knowledge),
+            'knowledge': extracted_knowledge
+        }
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        with open(args.output, 'w', encoding='utf-8') as f:
+            json.dump(output_data, f, indent=2, ensure_ascii=False)
+
+        logger.info(f"Parallel processing complete: {len(extracted_knowledge)} items extracted")
+        logger.info(f"Output saved to: {args.output}")
+        return
+
+    # Sequential processing (original logic)
     # Check for resume
     processed_ids = set()
     extracted_knowledge = []

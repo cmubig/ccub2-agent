@@ -209,7 +209,7 @@ def convert_contributions_to_dataset(contributions_csv: Path, output_json: Path,
     return len(new_items)
 
 
-def run_initialization(data_dir: Path, country: str, status: dict, skip_images: bool = False):
+def run_initialization(data_dir: Path, country: str, status: dict, skip_images: bool = False, use_firebase: bool = True):
     """Run missing initialization steps."""
     import subprocess
 
@@ -221,18 +221,23 @@ def run_initialization(data_dir: Path, country: str, status: dict, skip_images: 
     print("="*80)
     print("")
 
-    # Step 1: Check contributions.csv
-    if not status['contributions_csv']:
+    # Step 1: Check contributions.csv (only if not using Firebase)
+    if not use_firebase and not status['contributions_csv']:
         logger.error("❌ data/_contributions.csv not found!")
         logger.error("Please add your contributions CSV file first.")
         return False
 
     # Step 2: Convert to approved_dataset.json (ALWAYS RUN - incremental update)
-    logger.info("▶ Step 2: Converting contributions to dataset...")
+    if use_firebase:
+        logger.info("▶ Step 2: Fetching latest data from Firebase...")
+    else:
+        logger.info("▶ Step 2: Loading data from local CSV...")
+
     new_items_added = convert_contributions_to_dataset(
         PROJECT_ROOT / "data" / "_contributions.csv",
         country_pack_dir / "approved_dataset.json",
-        country
+        country,
+        use_firebase=use_firebase
     )
     print("")
 
@@ -418,6 +423,43 @@ Examples:
         logger.info("Run without --check-only to initialize missing components")
         return
 
+    # Ask about data source
+    use_firebase = False
+    firebase_status = status.get('firebase_status', 'unavailable')
+
+    if firebase_status in ['admin_sdk', 'rest_api']:
+        print("")
+        print("📊 Data Source Selection")
+        print("="*80)
+        print("")
+        print("Firebase is available. Would you like to fetch the latest data from Firebase?")
+        print("")
+        print("  [Y] Yes - Fetch latest contributions from Firebase (recommended)")
+        print("  [N] No  - Use existing local CSV file (_contributions.csv)")
+        print("")
+
+        choice = input("Fetch from Firebase? [Y/n]: ").strip().lower()
+        use_firebase = not choice or choice in ['y', 'yes']
+
+        if use_firebase:
+            print("✓ Will fetch latest data from Firebase")
+        else:
+            print("✓ Will use local CSV file")
+            # Check if CSV exists when user chooses CSV mode
+            if not status['contributions_csv']:
+                logger.error("❌ data/_contributions.csv not found!")
+                logger.error("Please add your contributions CSV file or choose Firebase.")
+                return
+        print("")
+    else:
+        print("")
+        print("ℹ️  Firebase is not available. Will use local CSV file (_contributions.csv)")
+        if not status['contributions_csv']:
+            logger.error("❌ data/_contributions.csv not found!")
+            logger.error("Please add your contributions CSV file first.")
+            return
+        print("")
+
     # Ask for confirmation
     print("This will initialize all missing components.")
     print("Depending on your dataset size, this may take 2-5 hours.")
@@ -428,7 +470,7 @@ Examples:
         return
 
     # Run initialization
-    success = run_initialization(args.data_dir, args.country, status, args.skip_images)
+    success = run_initialization(args.data_dir, args.country, status, args.skip_images, use_firebase)
 
     if not success:
         logger.error("Initialization failed. Please check errors above.")
