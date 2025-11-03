@@ -91,7 +91,7 @@ def test_full_workflow(
 
         # Save initial image
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        initial_path = output_dir / f"{model_type}_{timestamp}_initial.png"
+        initial_path = output_dir / f"t2i-{t2i_model}_i2i-{model_type}_{timestamp}_initial.png"
         initial_image.save(initial_path)
         logger.info(f"✓ Initial image saved: {initial_path}")
     except Exception as e:
@@ -131,169 +131,257 @@ def test_full_workflow(
     logger.info("✓ VLM and CLIP reloaded")
     logger.info("")
 
-    # Detect issues
-    logger.info("3. Detecting cultural issues...")
-    try:
-        issues = vlm_detector.detect(
-            image_path=initial_path,
-            prompt=prompt,
-            country=country,
-            editing_prompt=None,
-            category=category,
-        )
-
-        logger.info(f"✓ Detected {len(issues)} issues:")
-        for i, issue in enumerate(issues, 1):
-            logger.info(f"   {i}. [{issue['type']}] {issue['description']} (severity: {issue['severity']}/10)")
-    except Exception as e:
-        logger.error(f"✗ Issue detection failed: {e}")
-        return None
-
-    logger.info("")
-
-    # Get cultural scores
-    logger.info("4. Evaluating initial quality...")
+    # Get initial cultural scores (before any editing)
+    logger.info("3. Evaluating initial quality...")
     try:
         initial_cultural, initial_prompt = vlm_detector.score_cultural_quality(
             image_path=initial_path,
             prompt=prompt,
             country=country,
         )
-        logger.info(f"✓ Initial scores - Cultural: {initial_cultural}/5, Prompt: {initial_prompt}/5")
+        logger.info(f"✓ Initial scores - Cultural: {initial_cultural}/10, Prompt: {initial_prompt}/10")
     except Exception as e:
         logger.error(f"✗ Scoring failed: {e}")
         return None
 
     logger.info("")
 
-    # Select reference image
-    logger.info("5. Selecting best reference image (1장)...")
-    try:
-        reference = reference_selector.select_best_reference(
-            query_image=initial_path,
-            issues=issues,
-            category=category,
-            k=10,
-        )
+    # ITERATIVE REFINEMENT LOOP
+    max_iterations = 3
+    current_image = initial_path
+    current_cultural = initial_cultural
+    current_prompt_score = initial_prompt
+    iteration_history = []
+    previous_instruction = None  # Track previous editing instruction for context
 
-        if reference:
-            logger.info(f"✓ Selected: {Path(reference['image_path']).name}")
-            logger.info(f"   Similarity: {reference['similarity']:.1%}")
-            logger.info(f"   Reason: {reference['reason']}")
-        else:
-            logger.warning("⚠ No reference image found")
+    for iteration in range(1, max_iterations + 1):
+        logger.info("="*80)
+        logger.info(f"ITERATION {iteration}/{max_iterations}")
+        logger.info("="*80)
+        logger.info("")
+
+        # Detect issues on current image
+        logger.info(f"4. Detecting cultural issues (iteration {iteration})...")
+        try:
+            issues = vlm_detector.detect(
+                image_path=current_image,
+                prompt=prompt,
+                country=country,
+                editing_prompt=previous_instruction,  # Pass previous editing context
+                category=category,
+            )
+
+            if issues:
+                logger.info(f"✓ Detected {len(issues)} issues:")
+                for i, issue in enumerate(issues[:5], 1):
+                    logger.info(f"   {i}. {issue['description']}")
+            else:
+                logger.info("✓ No cultural issues detected!")
+        except Exception as e:
+            logger.error(f"✗ Issue detection failed: {e}")
+            issues = []
+
+        logger.info("")
+
+        # Check early exit conditions
+        # Exit ONLY if no issues detected (ignore score threshold)
+        # We want to continue improving until VLM finds no issues
+        if not issues:
+            logger.info(f"✓ No issues detected! Current scores: Cultural {current_cultural}/10, Prompt {current_prompt_score}/10")
+            logger.info("   Stopping iteration")
+            logger.info("")
+            break
+
+        # Log current status
+        logger.info(f"   Current scores: Cultural {current_cultural}/10, Prompt {current_prompt_score}/10")
+        logger.info(f"   Continuing iteration to fix remaining {len(issues)} issues")
+        logger.info("")
+
+        # Select reference image
+        logger.info(f"5. Selecting best reference image (iteration {iteration})...")
+        try:
+            reference = reference_selector.select_best_reference(
+                query_image=current_image,
+                issues=issues,
+                category=category,
+                k=10,
+            )
+
+            if reference:
+                logger.info(f"✓ Selected: {Path(reference['image_path']).name}")
+                logger.info(f"   Similarity: {reference['similarity']:.1%}")
+                logger.info(f"   Reason: {reference['reason']}")
+            else:
+                logger.warning("⚠ No reference image found")
+                reference = None
+        except Exception as e:
+            logger.error(f"✗ Reference selection failed: {e}")
             reference = None
-    except Exception as e:
-        logger.error(f"✗ Reference selection failed: {e}")
-        reference = None
 
-    logger.info("")
+        logger.info("")
 
-    # Generate editing instruction with MODEL-SPECIFIC optimization
-    logger.info("6. Generating model-specific editing instruction...")
+        # Generate editing instruction with MODEL-SPECIFIC optimization
+        logger.info(f"6. Generating model-specific editing instruction (iteration {iteration})...")
 
-    # Build universal instruction first
-    universal_instruction = f"Improve the cultural accuracy of the {category} in this {country} image."
+        # Build universal instruction first
+        universal_instruction = f"Improve the cultural accuracy of the {category} in this {country} image."
 
-    if issues:
-        universal_instruction += f" Fix these issues: "
-        for issue in issues[:3]:
-            universal_instruction += f"{issue['description']}. "
+        if issues:
+            universal_instruction += f" Fix these issues: "
+            for issue in issues[:3]:
+                universal_instruction += f"{issue['description']}. "
 
-    # Create editing context
-    from ccub2_agent.modules.prompt_adapter import get_prompt_adapter, EditingContext
+        # Create editing context
+        from ccub2_agent.modules.prompt_adapter import get_prompt_adapter, EditingContext
 
-    context = EditingContext(
-        original_prompt=prompt,
-        detected_issues=issues,
-        cultural_elements=cultural_context if cultural_context else "",
-        reference_images=[reference['image_path']] if reference else None,
-        country=country,
-        category=category,
-        preserve_identity=True
-    )
+        # Get cultural context from reference if available
+        cultural_context = ""
+        if reference and 'description' in reference:
+            cultural_context = reference['description']
 
-    # Get model-specific optimized prompt!
-    adapter = get_prompt_adapter()
-    instruction = adapter.adapt(universal_instruction, model_type, context)
-
-    logger.info(f"Universal instruction: {universal_instruction}")
-    logger.info(f"Model-specific ({model_type}) instruction:\n{instruction}")
-    logger.info("")
-
-    # Free VLM and CLIP memory before editing
-    logger.info("Freeing VLM and CLIP memory for editing...")
-    vlm_obj = vlm_detector.vlm
-    clip_obj = vlm_detector.clip_rag
-    vlm_detector.vlm = None
-    vlm_detector.clip_rag = None
-    del vlm_obj
-    del clip_obj
-    gc.collect()
-    torch.cuda.empty_cache()
-    logger.info("✓ VLM and CLIP memory freed")
-    logger.info("")
-
-    # Reload adapter for editing
-    logger.info("Reloading adapter for editing...")
-    adapter = create_adapter(model_type=model_type, t2i_model=t2i_model, device="auto")
-    logger.info("✓ Adapter reloaded")
-    logger.info("")
-
-    # Edit image
-    logger.info("7. Editing image with reference...")
-    try:
-        edited_image = adapter.edit(
-            image=initial_path,
-            instruction=instruction,
-            reference_image=Path(reference['image_path']) if reference else None,
-            strength=0.8,
-            seed=42,
-        )
-
-        edited_path = output_dir / f"{model_type}_{timestamp}_edited.png"
-        edited_image.save(edited_path)
-        logger.info(f"✓ Edited image saved: {edited_path}")
-    except Exception as e:
-        logger.error(f"✗ Image editing failed: {e}")
-        return None
-
-    logger.info("")
-
-    # Free adapter memory before re-evaluation
-    logger.info("Freeing adapter memory for re-evaluation...")
-    del adapter
-    gc.collect()
-    torch.cuda.empty_cache()
-    logger.info("✓ Adapter memory freed")
-    logger.info("")
-
-    # Reload VLM for re-evaluation (no CLIP needed for scoring)
-    logger.info("Reloading VLM for re-evaluation...")
-    from metric.cultural_metric.enhanced_cultural_metric_pipeline import EnhancedVLMClient
-    vlm_detector.vlm = EnhancedVLMClient(
-        model_name="Qwen/Qwen3-VL-8B-Instruct",
-        load_in_4bit=True,
-    )
-    logger.info("✓ VLM reloaded")
-    logger.info("")
-
-    # Re-evaluate
-    logger.info("8. Re-evaluating edited image...")
-    try:
-        final_cultural, final_prompt = vlm_detector.score_cultural_quality(
-            image_path=edited_path,
-            prompt=prompt,
+        context = EditingContext(
+            original_prompt=prompt,
+            detected_issues=issues,
+            cultural_elements=cultural_context if cultural_context else "",
+            reference_images=[reference['image_path']] if reference else None,
             country=country,
+            category=category,
+            preserve_identity=True
         )
 
-        logger.info(f"✓ Final scores - Cultural: {final_cultural}/5, Prompt: {final_prompt}/5")
-        logger.info(f"   Improvement: Cultural +{final_cultural - initial_cultural}, Prompt +{final_prompt - initial_prompt}")
-    except Exception as e:
-        logger.error(f"✗ Re-evaluation failed: {e}")
-        return None
+        # Get model-specific optimized prompt!
+        prompt_adapter = get_prompt_adapter()
+        instruction = prompt_adapter.adapt(universal_instruction, model_type, context)
 
-    logger.info("")
+        logger.info(f"Universal instruction: {universal_instruction}")
+        logger.info(f"Model-specific ({model_type}) instruction:\n{instruction}")
+        logger.info("")
+
+        # Free VLM and CLIP memory before editing
+        logger.info("Freeing VLM and CLIP memory for editing...")
+        vlm_obj = vlm_detector.vlm
+        clip_obj = vlm_detector.clip_rag
+        vlm_detector.vlm = None
+        vlm_detector.clip_rag = None
+        del vlm_obj
+        del clip_obj
+        gc.collect()
+        torch.cuda.empty_cache()
+        logger.info("✓ VLM and CLIP memory freed")
+        logger.info("")
+
+        # Reload adapter for editing
+        logger.info("Reloading adapter for editing...")
+        adapter = create_adapter(model_type=model_type, t2i_model=t2i_model, device="auto")
+        logger.info("✓ Adapter reloaded")
+        logger.info("")
+
+        # Edit image
+        logger.info(f"7. Editing image with reference (iteration {iteration})...")
+        try:
+            edited_image = adapter.edit(
+                image=current_image,
+                instruction=instruction,
+                reference_image=Path(reference['image_path']) if reference else None,
+                strength=0.8,
+                seed=42,
+            )
+
+            edited_path = output_dir / f"t2i-{t2i_model}_i2i-{model_type}_{timestamp}_iter{iteration}.png"
+            edited_image.save(edited_path)
+            logger.info(f"✓ Edited image saved: {edited_path}")
+        except Exception as e:
+            logger.error(f"✗ Image editing failed: {e}")
+            break
+
+        logger.info("")
+
+        # Free adapter memory before re-evaluation
+        logger.info("Freeing adapter memory for re-evaluation...")
+        del adapter
+        gc.collect()
+        torch.cuda.empty_cache()
+        logger.info("✓ Adapter memory freed")
+        logger.info("")
+
+        # Reload VLM for re-evaluation (no CLIP needed for scoring)
+        logger.info("Reloading VLM for re-evaluation...")
+        from metric.cultural_metric.enhanced_cultural_metric_pipeline import EnhancedVLMClient
+        vlm_detector.vlm = EnhancedVLMClient(
+            model_name="Qwen/Qwen3-VL-8B-Instruct",
+            load_in_4bit=True,
+        )
+        logger.info("✓ VLM reloaded")
+        logger.info("")
+
+        # Re-evaluate
+        logger.info(f"8. Re-evaluating edited image (iteration {iteration})...")
+        try:
+            new_cultural, new_prompt = vlm_detector.score_cultural_quality(
+                image_path=edited_path,
+                prompt=prompt,
+                country=country,
+            )
+
+            logger.info(f"✓ Iteration {iteration} scores - Cultural: {new_cultural}/10, Prompt: {new_prompt}/10")
+            logger.info(f"   Change from previous: Cultural {new_cultural - current_cultural:+d}, Prompt {new_prompt - current_prompt_score:+d}")
+            logger.info(f"   Change from initial: Cultural {new_cultural - initial_cultural:+d}, Prompt {new_prompt - initial_prompt:+d}")
+        except Exception as e:
+            logger.error(f"✗ Re-evaluation failed: {e}")
+            break
+
+        logger.info("")
+
+        # Save iteration history
+        iteration_history.append({
+            'iteration': iteration,
+            'image_path': str(edited_path),
+            'cultural_score': new_cultural,
+            'prompt_score': new_prompt,
+            'issues_detected': len(issues),
+            'reference_used': reference is not None,
+            'cultural_change': new_cultural - current_cultural,
+            'prompt_change': new_prompt - current_prompt_score,
+        })
+
+        # Check termination conditions
+        # Only stop if BOTH scores don't improve (stuck)
+        # Allow iteration to continue if at least one score improves
+        if new_cultural < current_cultural and new_prompt < current_prompt_score:
+            logger.info(f"⚠ Both scores decreased (Cultural: {new_cultural}/{current_cultural}, Prompt: {new_prompt}/{current_prompt_score})")
+            logger.info("   Stopping iteration - quality degraded")
+            logger.info("")
+            # Don't use the worse version
+            break
+
+        # Update current state for next iteration
+        current_image = edited_path
+        current_cultural = new_cultural
+        current_prompt_score = new_prompt
+        previous_instruction = instruction  # Save instruction for next iteration's context
+
+        # Reload CLIP for next iteration (needed for reference selection)
+        if iteration < max_iterations:
+            logger.info("Reloading CLIP for next iteration...")
+            from ccub2_agent.modules.clip_image_rag import CLIPImageRAG
+            clip_index_dir = Path("data/clip_index") / country
+            if clip_index_dir.exists():
+                vlm_detector.clip_rag = CLIPImageRAG(
+                    index_dir=clip_index_dir,
+                    model_name="openai/clip-vit-base-patch32",
+                    device="cuda",
+                )
+                reference_selector.clip_rag = vlm_detector.clip_rag
+            logger.info("✓ CLIP reloaded")
+            logger.info("")
+
+    # Final evaluation if we didn't just evaluate
+    if not iteration_history or iteration_history[-1]['image_path'] != str(current_image):
+        final_cultural = current_cultural
+        final_prompt = current_prompt_score
+    else:
+        final_cultural = iteration_history[-1]['cultural_score']
+        final_prompt = iteration_history[-1]['prompt_score']
 
     # Summary
     result = {
@@ -305,20 +393,28 @@ def test_full_workflow(
         'final_prompt': final_prompt,
         'cultural_improvement': final_cultural - initial_cultural,
         'prompt_improvement': final_prompt - initial_prompt,
-        'issues_detected': len(issues),
-        'reference_used': reference is not None,
+        'iterations': len(iteration_history),
+        'iteration_history': iteration_history,
         'initial_image': str(initial_path),
-        'edited_image': str(edited_path),
+        'final_image': str(current_image),
     }
 
     logger.info("="*80)
     logger.info("RESULT SUMMARY")
     logger.info("="*80)
     logger.info(f"Model: {model_type}")
+    logger.info(f"Iterations: {len(iteration_history)}/{max_iterations}")
     logger.info(f"Cultural: {initial_cultural} → {final_cultural} ({'+' if result['cultural_improvement'] >= 0 else ''}{result['cultural_improvement']})")
     logger.info(f"Prompt: {initial_prompt} → {final_prompt} ({'+' if result['prompt_improvement'] >= 0 else ''}{result['prompt_improvement']})")
-    logger.info(f"Issues detected: {len(issues)}")
-    logger.info(f"Reference used: {'✓' if reference else '✗'}")
+
+    if iteration_history:
+        logger.info("")
+        logger.info("Iteration History:")
+        for iter_data in iteration_history:
+            logger.info(f"  Iter {iter_data['iteration']}: Cultural={iter_data['cultural_score']}/10 ({iter_data['cultural_change']:+d}), "
+                       f"Prompt={iter_data['prompt_score']}/10 ({iter_data['prompt_change']:+d}), "
+                       f"Issues={iter_data['issues_detected']}")
+
     logger.info("="*80)
     logger.info("")
 
@@ -621,6 +717,12 @@ Examples:
         default=PROJECT_ROOT / "results" / "model_agnostic_tests",
         help='Output directory'
     )
+    parser.add_argument(
+        '--data-dir',
+        type=Path,
+        default=Path.home() / "ccub2-agent-data",
+        help='Data directory (default: ~/ccub2-agent-data)'
+    )
 
     args = parser.parse_args()
 
@@ -652,7 +754,8 @@ Examples:
     logger.info("")
 
     # Check if dataset is initialized
-    data_dir = PROJECT_ROOT / "data"
+    data_dir = args.data_dir
+    logger.info(f"Using data directory: {data_dir}")
     # Interactive mode only offers auto-initialization if prompt was not provided via CLI
     is_interactive = not hasattr(args, '_from_cli') or not args._from_cli
     if not check_initialization(args.country, data_dir, interactive=is_interactive):
@@ -664,8 +767,8 @@ Examples:
     # Initialize components
     logger.info(">>> Initializing components...")
 
-    text_index_dir = PROJECT_ROOT / "data" / "cultural_index" / args.country
-    clip_index_dir = PROJECT_ROOT / "data" / "clip_index" / args.country
+    text_index_dir = data_dir / "cultural_index" / args.country
+    clip_index_dir = data_dir / "clip_index" / args.country
 
     vlm_detector = create_vlm_detector(
         model_name="Qwen/Qwen3-VL-8B-Instruct",
@@ -717,9 +820,10 @@ Examples:
 
         for result in results:
             logger.info(f"\n{result['model'].upper()}:")
+            logger.info(f"  Iterations: {result['iterations']}/3")
             logger.info(f"  Cultural improvement: {result['cultural_improvement']:+d}")
             logger.info(f"  Prompt improvement: {result['prompt_improvement']:+d}")
-            logger.info(f"  Final cultural score: {result['final_cultural']}/5")
+            logger.info(f"  Final cultural score: {result['final_cultural']}/10")
 
         logger.info("")
         logger.info("="*80)
