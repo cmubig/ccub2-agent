@@ -3,7 +3,12 @@ Model-agnostic cultural correction adapter.
 """
 
 from typing import Any, Dict, List, Optional
+import json
 import logging
+import re
+
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 from .detector import CulturalDetector
 from .ccub_metric import CCUBMetric
@@ -27,6 +32,10 @@ class CulturalCorrectionAdapter:
         country_pack: CountryDataPack,
         detector: CulturalDetector,
         metric: CCUBMetric,
+        llm_model_name: str = "openai/gpt-oss-20b",
+        load_in_4bit: bool = False,
+        load_in_8bit: bool = False,
+        device: str = "cuda",
     ):
         """
         Initialize correction adapter.
@@ -36,15 +45,61 @@ class CulturalCorrectionAdapter:
             country_pack: Country-specific data pack
             detector: Cultural problem detector
             metric: Cultural accuracy metric
+            llm_model_name: LLM for edit intent generation (default: GPT-OSS-20B)
+            load_in_4bit: Use 4-bit quantization for LLM
+            load_in_8bit: Use 8-bit quantization for LLM
+            device: Device for LLM (cuda/cpu)
         """
         self.model = model_interface
         self.country_pack = country_pack
         self.detector = detector
         self.metric = metric
 
+        # Lazy loading for LLM (only load when needed)
+        self.llm_model_name = llm_model_name
+        self.load_in_4bit = load_in_4bit
+        self.load_in_8bit = load_in_8bit
+        self.device = device
+        self.llm_model = None
+        self.llm_tokenizer = None
+        self.use_chat_template = False
+
         logger.info(
             f"CulturalCorrectionAdapter initialized with model: {model_interface.model_name}"
         )
+        logger.info(f"LLM for edit intent: {llm_model_name} (lazy loading)")
+
+    def _load_llm(self):
+        """Load LLM model for edit intent generation (lazy loading)."""
+        if self.llm_model is not None:
+            return
+
+        logger.info(f"Loading LLM: {self.llm_model_name}...")
+
+        model_kwargs = {"torch_dtype": torch.float16}
+        tokenizer_kwargs = {}
+
+        # Quantization config
+        if self.load_in_4bit or self.load_in_8bit:
+            quant_config = BitsAndBytesConfig(
+                load_in_4bit=self.load_in_4bit,
+                load_in_8bit=self.load_in_8bit,
+                bnb_4bit_compute_dtype=torch.float16,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4"
+            )
+            model_kwargs["quantization_config"] = quant_config
+
+        self.llm_tokenizer = AutoTokenizer.from_pretrained(
+            self.llm_model_name, **tokenizer_kwargs
+        )
+        self.llm_model = AutoModelForCausalLM.from_pretrained(
+            self.llm_model_name, device_map="auto", **model_kwargs
+        )
+        self.llm_model.eval()
+        self.use_chat_template = hasattr(self.llm_tokenizer, "apply_chat_template")
+
+        logger.info(f"✓ LLM loaded: {self.llm_model_name}")
 
     def correct(
         self,
@@ -218,12 +273,85 @@ Respond in JSON format:
 }}
 """
 
-        # TODO: Call actual LLM
-        # response = call_llm(llm_prompt)
-        # return parse_json(response)
+        # Call actual LLM
+        try:
+            # Ensure LLM is loaded
+            self._load_llm()
 
-        # Placeholder response
-        return self._generate_edit_intent_placeholder(prompt, issues, country)
+            # Invoke LLM
+            response = self._invoke_llm(llm_prompt)
+
+            # Parse JSON response
+            parsed = self._parse_json_response(response)
+
+            # Validate required fields
+            if parsed and all(k in parsed for k in ["enhanced_prompt", "focus_areas", "cultural_elements_to_add"]):
+                return parsed
+            else:
+                logger.warning("LLM response missing required fields, using placeholder")
+                return self._generate_edit_intent_placeholder(prompt, issues, country)
+
+        except Exception as e:
+            logger.error(f"LLM generation failed: {e}")
+            logger.info("Falling back to placeholder edit intent")
+            return self._generate_edit_intent_placeholder(prompt, issues, country)
+
+    def _invoke_llm(self, instruction: str) -> str:
+        """Invoke LLM with the given instruction."""
+        try:
+            if self.use_chat_template:
+                messages = [
+                    {"role": "system", "content": "You are a cultural image editing expert."},
+                    {"role": "user", "content": instruction},
+                ]
+                encoded = self.llm_tokenizer.apply_chat_template(
+                    messages, add_generation_prompt=True, return_tensors="pt"
+                ).to(self.device)
+            else:
+                encoded = self.llm_tokenizer.encode(
+                    f"system You are a cultural image editing expert. user {instruction}",
+                    return_tensors="pt"
+                ).to(self.device)
+
+            with torch.inference_mode():
+                outputs = self.llm_model.generate(
+                    encoded,
+                    attention_mask=torch.ones_like(encoded),
+                    max_new_tokens=512,
+                    do_sample=True,
+                    temperature=0.7,
+                    pad_token_id=self.llm_tokenizer.eos_token_id,
+                )
+
+            response = self.llm_tokenizer.decode(
+                outputs[0][encoded.shape[1]:], skip_special_tokens=True
+            )
+            return response
+
+        except Exception as e:
+            logger.error(f"LLM invocation failed: {e}")
+            raise
+
+    def _parse_json_response(self, response: str) -> Dict:
+        """Parse JSON response from LLM."""
+        # Try to extract JSON object
+        json_match = re.search(r'\{.*\}', response, re.DOTALL)
+        if not json_match:
+            logger.warning("No JSON object found in LLM response")
+            return {}
+
+        try:
+            return json.loads(json_match.group())
+        except json.JSONDecodeError:
+            # Try to fix common JSON issues
+            json_str = json_match.group()
+            json_str = re.sub(r'(\w+):', r'"\1":', json_str)  # Add quotes to keys
+            json_str = re.sub(r"'", '"', json_str)  # Replace single quotes
+            try:
+                return json.loads(json_str)
+            except json.JSONDecodeError as e:
+                logger.warning(f"JSON parsing failed: {e}")
+                return {}
 
     def _format_issues(self, issues: List[Dict]) -> str:
         """Format issues for LLM prompt."""
