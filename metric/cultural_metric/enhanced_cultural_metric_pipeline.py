@@ -753,13 +753,17 @@ Example: Cultural:8,Prompt:7"""
                             prompt_score = int(prompt_nums[0])
                 
                 # Clamp to valid range (1-10 scale)
+                if self.debug:
+                    print(f"[DEBUG] Before clamping: cultural={cultural_score}, prompt={prompt_score}")
                 cultural_score = max(1, min(10, cultural_score))
                 prompt_score = max(1, min(10, prompt_score))
-                
+                if self.debug:
+                    print(f"[DEBUG] After clamping: cultural={cultural_score}, prompt={prompt_score}")
+
             except (ValueError, IndexError) as e:
                 if self.debug:
                     print(f"[DEBUG] Score parsing failed: {e}, output was: '{output}', using defaults")
-            
+
             if self.debug:
                 print(f"[DEBUG] Final scores: cultural={cultural_score}, prompt={prompt_score}")
             
