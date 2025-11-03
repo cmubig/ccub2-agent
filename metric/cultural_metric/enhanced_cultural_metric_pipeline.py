@@ -752,9 +752,9 @@ Example: Cultural:8,Prompt:7"""
                             cultural_score = int(cultural_nums[0])
                             prompt_score = int(prompt_nums[0])
                 
-                # Clamp to valid range
-                cultural_score = max(1, min(5, cultural_score))
-                prompt_score = max(1, min(5, prompt_score))
+                # Clamp to valid range (1-10 scale)
+                cultural_score = max(1, min(10, cultural_score))
+                prompt_score = max(1, min(10, prompt_score))
                 
             except (ValueError, IndexError) as e:
                 if self.debug:
