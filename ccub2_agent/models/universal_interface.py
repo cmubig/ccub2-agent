@@ -1,9 +1,9 @@
 """
 Universal I2I interface - IMPLEMENTATION VERSION
-실제 모델 로딩 코드 포함
+Contains actual model loading code
 
-이 파일은 실제 모델을 로드하는 구현 버전입니다.
-프로덕션 환경에서는 이 파일을 universal_interface.py로 교체하세요.
+This is the implementation version that loads actual models.
+In production, replace this file with universal_interface.py.
 """
 
 from typing import Any, Dict, List, Optional, Callable
@@ -26,7 +26,7 @@ class BaseI2IModel(ABC):
     def optimize_memory(self, pipe):
         """
         Apply memory optimizations to pipeline.
-        모델 불가지론적 메모리 최적화.
+        Model-agnostic memory optimization.
         """
         if not torch.cuda.is_available():
             return pipe
@@ -86,7 +86,7 @@ class FluxKontextWrapper(BaseI2IModel):
                 torch_dtype=self.dtype,
             )
 
-            # 공통 메모리 최적화 사용
+            # Apply common memory optimizations
             self.pipe = self.optimize_memory(self.pipe)
 
             logger.info("✓ FLUX.1 Kontext loaded successfully")
@@ -134,7 +134,7 @@ class HiDreamWrapper(BaseI2IModel):
                 use_safetensors=True,
             )
 
-            # 공통 메모리 최적화 사용
+            # Apply common memory optimizations
             self.pipe = self.optimize_memory(self.pipe)
 
             logger.info("✓ HiDream-E1.1 loaded successfully")
@@ -177,17 +177,17 @@ class SD35Wrapper(BaseI2IModel):
                 StableDiffusion3Img2ImgPipeline,
             )
 
-            # T2I 파이프라인
+            # T2I pipeline
             self.pipe_t2i = StableDiffusion3Pipeline.from_pretrained(
                 "stabilityai/stable-diffusion-3.5-medium", torch_dtype=self.dtype
             )
 
-            # I2I 파이프라인 (편집용)
+            # I2I pipeline (for editing)
             self.pipe_i2i = StableDiffusion3Img2ImgPipeline.from_pretrained(
                 "stabilityai/stable-diffusion-3.5-medium", torch_dtype=self.dtype
             )
 
-            # 공통 메모리 최적화 사용
+            # Apply common memory optimizations
             self.pipe_t2i = self.optimize_memory(self.pipe_t2i)
             self.pipe_i2i = self.optimize_memory(self.pipe_i2i)
 
@@ -225,7 +225,7 @@ class QwenEditWrapper(BaseI2IModel):
     def __init__(self):
         logger.info("Loading Qwen-Image-Edit-2509...")
         try:
-            # Qwen-Image-Edit은 특별한 설치가 필요할 수 있음
+            # Qwen-Image-Edit may require special installation
             from qwen_image import QwenImageEditPipeline
 
             self.pipe = QwenImageEditPipeline.from_pretrained(
@@ -407,20 +407,20 @@ class UniversalI2IInterface:
         return list(cls._MODEL_REGISTRY.keys())
 
 
-# 편의 함수
+# Helper function
 def create_interface(
     model_name: str, use_cpu: bool = False, optimize_memory: bool = True
 ) -> UniversalI2IInterface:
     """
-    편리한 인터페이스 생성 함수.
+    Convenient interface creation function.
 
     Args:
-        model_name: 모델 이름
-        use_cpu: CPU 사용 강제 (기본: GPU 자동 감지)
-        optimize_memory: 메모리 최적화 활성화
+        model_name: Model name
+        use_cpu: Force CPU usage (default: auto-detect GPU)
+        optimize_memory: Enable memory optimizations
 
     Returns:
-        UniversalI2IInterface 인스턴스
+        UniversalI2IInterface instance
     """
     if use_cpu:
         import os
@@ -431,6 +431,6 @@ def create_interface(
 
     if optimize_memory and torch.cuda.is_available():
         logger.info("Applying memory optimizations...")
-        # 최적화는 각 wrapper에서 자동 적용됨
+        # Optimizations are automatically applied in each wrapper
 
     return interface

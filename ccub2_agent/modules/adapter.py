@@ -383,7 +383,7 @@ Respond in JSON format:
 
         if "text" in categories:
             if country.lower() == "korea":
-                enhanced_prompt += "Use proper Korean Hangul (한글) characters. "
+                enhanced_prompt += "Use proper Korean Hangul characters. "
             elif country.lower() == "japan":
                 enhanced_prompt += "Use proper Japanese characters. "
 

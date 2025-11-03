@@ -5,7 +5,7 @@ Test Model-Agnostic Image Editing
 Tests the full workflow with different I2I models:
 1. Generate image with cultural problems
 2. VLM detects issues
-3. Select best reference image (1장)
+3. Select best reference image (single image)
 4. Edit with reference
 5. Re-evaluate improvement
 
