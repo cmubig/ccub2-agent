@@ -9,7 +9,7 @@ Tests the full workflow with different I2I models:
 4. Edit with reference
 5. Re-evaluate improvement
 
-Supports: Qwen, SDXL, Flux
+Supports: Qwen (I2I), Qwen-Image (T2I), SDXL, Flux, SD3.5 Medium, Gemini (Nano Banana)
 """
 
 import argparse
@@ -48,7 +48,7 @@ def test_full_workflow(
 
     Args:
         prompt: Generation prompt
-        model_type: 'qwen', 'sdxl', or 'flux'
+        model_type: 'qwen', 'sdxl', 'flux', 'sd35', or 'gemini'
         country: Target country
         category: Image category
         vlm_detector: VLM detector instance
@@ -65,18 +65,25 @@ def test_full_workflow(
     logger.info(f"Country: {country}, Category: {category}")
     logger.info("")
 
-    # Free VLM and CLIP memory before loading image generator
-    logger.info("0. Freeing VLM and CLIP memory temporarily...")
-    vlm_obj = vlm_detector.vlm
-    clip_obj = vlm_detector.clip_rag
-    vlm_detector.vlm = None
-    vlm_detector.clip_rag = None
-    del vlm_obj
-    del clip_obj
-    gc.collect()
-    torch.cuda.empty_cache()
-    logger.info("✓ Memory freed")
-    logger.info("")
+    # Free VLM and CLIP memory before loading image generator (skip for API-based models)
+    if model_type not in ['gemini'] and t2i_model not in ['gemini', 'qwen-t2i']:
+        logger.info("0. Freeing VLM and CLIP memory temporarily...")
+        vlm_obj = vlm_detector.vlm
+        clip_obj = vlm_detector.clip_rag
+        vlm_detector.vlm = None
+        vlm_detector.clip_rag = None
+        del vlm_obj
+        del clip_obj
+        gc.collect()
+        torch.cuda.empty_cache()
+        logger.info("✓ Memory freed")
+        logger.info("")
+    else:
+        if 'gemini' in [model_type, t2i_model]:
+            logger.info("0. Using API-based model (Gemini) - skipping memory management")
+        else:
+            logger.info("0. Loading Qwen-Image T2I model...")
+        logger.info("")
 
     # Create adapter
     logger.info(f"1. Initializing {model_type} adapter (T2I: {t2i_model})...")
@@ -439,13 +446,17 @@ def interactive_mode():
     print("")
     print("  1. SDXL (Stable Diffusion XL) - Fast, balanced")
     print("  2. FLUX - High quality, slower")
+    print("  3. SD3.5 Medium - Excellent prompt understanding")
+    print("  4. Qwen-Image - Text rendering specialist (Chinese/English)")
+    print("  5. Gemini (Nano Banana) - API-based, requires GOOGLE_API_KEY")
     print("")
     while True:
-        choice = input("Enter your choice [1-2] (default: 1): ").strip() or "1"
-        if choice in ['1', '2']:
-            t2i_model = 'sdxl' if choice == '1' else 'flux'
+        choice = input("Enter your choice [1-5] (default: 1): ").strip() or "1"
+        if choice in ['1', '2', '3', '4', '5']:
+            model_map = {'1': 'sdxl', '2': 'flux', '3': 'sd35', '4': 'qwen-t2i', '5': 'gemini'}
+            t2i_model = model_map[choice]
             break
-        print("Invalid choice. Please enter 1 or 2.")
+        print("Invalid choice. Please enter 1-5.")
     print(f"✓ Selected T2I model: {t2i_model.upper()}")
     print("")
 
@@ -458,15 +469,17 @@ def interactive_mode():
     print("  1. Qwen Image Edit - Text rendering, detailed")
     print("  2. SDXL - Balanced, versatile")
     print("  3. FLUX Kontext - Context preservation")
-    print("  4. ALL - Test all models (takes longer)")
+    print("  4. SD3.5 Medium - Natural language understanding")
+    print("  5. Gemini (Nano Banana) - Conversational editing, API-based")
+    print("  6. ALL - Test all models (takes longer)")
     print("")
     while True:
-        choice = input("Enter your choice [1-4] (default: 1): ").strip() or "1"
-        if choice in ['1', '2', '3', '4']:
-            model_map = {'1': 'qwen', '2': 'sdxl', '3': 'flux', '4': 'all'}
+        choice = input("Enter your choice [1-6] (default: 1): ").strip() or "1"
+        if choice in ['1', '2', '3', '4', '5', '6']:
+            model_map = {'1': 'qwen', '2': 'sdxl', '3': 'flux', '4': 'sd35', '5': 'gemini', '6': 'all'}
             model = model_map[choice]
             break
-        print("Invalid choice. Please enter 1-4.")
+        print("Invalid choice. Please enter 1-6.")
     print(f"✓ Selected I2I model: {model.upper()}")
     print("")
 
@@ -692,14 +705,14 @@ Examples:
     parser.add_argument(
         '--model',
         type=str,
-        choices=['qwen', 'sdxl', 'flux', 'all'],
+        choices=['qwen', 'sdxl', 'flux', 'sd35', 'gemini', 'all'],
         help='I2I model to test (or "all" for all models)'
     )
     parser.add_argument(
         '--t2i-model',
         type=str,
-        choices=['sdxl', 'flux'],
-        help='T2I model for initial image generation'
+        choices=['sdxl', 'flux', 'sd35', 'gemini', 'qwen-t2i'],
+        help='T2I model for initial image generation (qwen-t2i for text rendering, gemini requires API key)'
     )
     parser.add_argument(
         '--country',
@@ -787,7 +800,7 @@ Examples:
     logger.info("")
 
     # Test models
-    models = ['qwen', 'sdxl', 'flux'] if args.model == 'all' else [args.model]
+    models = ['qwen', 'sdxl', 'flux', 'sd35', 'gemini'] if args.model == 'all' else [args.model]
 
     results = []
     for model_type in models:
