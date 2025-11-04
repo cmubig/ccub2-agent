@@ -100,6 +100,68 @@ def print_status(status: dict):
     print("")
 
 
+def extract_job_metadata(job_description: str) -> dict:
+    """
+    Extract metadata from job description.
+
+    Job descriptions created by agent have this format:
+    ---
+    📊 **Project Details:**
+    • Country: korea
+    • Category: traditional_clothing
+    • Subcategory: jeogori_collar
+    • Keywords: jeogori, collar, neckline
+    • Target: 15 contributions
+    ---
+
+    Args:
+        job_description: Job description string
+
+    Returns:
+        dict with: country, category, subcategory, keywords
+    """
+    import re
+
+    metadata = {
+        "country": None,
+        "category": None,
+        "subcategory": "general",
+        "keywords": []
+    }
+
+    if not job_description:
+        return metadata
+
+    # Parse metadata section
+    for line in job_description.split('\n'):
+        line = line.strip()
+
+        # Country (use word boundary to avoid matching in other words)
+        match = re.search(r'\bCountry:\s*(\w+)', line, re.IGNORECASE)
+        if match:
+            metadata["country"] = match.group(1)
+
+        # Category (must NOT be Subcategory!)
+        match = re.search(r'^•?\s*Category:\s*([\w_]+)', line, re.IGNORECASE)
+        if match and "subcategory" not in line.lower():
+            metadata["category"] = match.group(1)
+
+        # Subcategory
+        match = re.search(r'\bSubcategory:\s*([\w_]+)', line, re.IGNORECASE)
+        if match:
+            metadata["subcategory"] = match.group(1)
+
+        # Keywords
+        match = re.search(r'\bKeywords:\s*(.+)', line, re.IGNORECASE)
+        if match:
+            keywords_str = match.group(1)
+            # Remove "N/A" and split by comma
+            if "N/A" not in keywords_str:
+                metadata["keywords"] = [k.strip() for k in keywords_str.split(',')]
+
+    return metadata
+
+
 def convert_contributions_to_dataset(contributions_csv: Path, output_json: Path, country: str, use_firebase: bool = True):
     """
     Convert contributions to approved_dataset.json format.
@@ -117,6 +179,19 @@ def convert_contributions_to_dataset(contributions_csv: Path, output_json: Path,
     from detect_available_countries import JOBID_TO_COUNTRY
 
     logger.info(f"Converting contributions to approved_dataset.json for {country}...")
+
+    # Load job information for metadata extraction
+    jobs_dict = {}
+    if use_firebase:
+        try:
+            sys.path.insert(0, str(PROJECT_ROOT))
+            from ccub2_agent.modules.firebase_client import get_firebase_client
+            firebase = get_firebase_client()
+            jobs = firebase.get_jobs()
+            jobs_dict = {job['__id__']: job for job in jobs}
+            logger.info(f"Loaded {len(jobs_dict)} jobs for metadata extraction")
+        except Exception as e:
+            logger.warning(f"Failed to load jobs: {e}")
 
     # Load existing dataset if available (for incremental update)
     existing_items = []
@@ -182,15 +257,35 @@ def convert_contributions_to_dataset(contributions_csv: Path, output_json: Path,
         if image_url in existing_urls:
             continue
 
+        # Extract metadata from job description if available
+        metadata = {"subcategory": "general", "keywords": []}
+        if jobId in jobs_dict:
+            job = jobs_dict[jobId]
+            job_description = job.get('description', '')
+            metadata = extract_job_metadata(job_description)
+
+        # Use extracted metadata or fallback to row data
+        category = metadata.get("category") or row.get('category', 'general')
+        subcategory = metadata.get("subcategory", "general")
+
         # Map columns properly
-        new_items.append({
-            'id': f"{country}_{row.get('category', 'general').replace(' & ', '_').replace(' ', '_').lower()}_{item_count:04d}",
-            'category': row.get('category', 'general'),
+        item = {
+            'id': f"{country}_{category.replace(' & ', '_').replace(' ', '_').lower()}_{item_count:04d}",
+            'category': category,
             'image_url': image_url,
             'caption': row.get('description', ''),
             'quality_score': min(5, max(1, int(row.get('likeCount', '0') or 0))),
             'jobId': jobId,
-        })
+            # NEW: metadata for subcategory tracking
+            '_metadata': {
+                'country': country,
+                'category': category,
+                'subcategory': subcategory,
+                'keywords': metadata.get("keywords", []),
+                'jobId': jobId
+            }
+        }
+        new_items.append(item)
         item_count += 1
 
     # Combine existing + new items

@@ -129,11 +129,16 @@ class CulturalAgent:
                     job_id = self.job_creator.create_job(
                         country=self.country,
                         category=gap["category"],
+                        subcategory=gap.get("subcategory", "general"),
                         keywords=gap["keywords"],
                         description=gap["description"],
+                        target_count=gap.get("issue_count", 1) * 10,  # 10x issue count
                     )
-                    jobs_created.append(job_id)
-                    logger.info(f"Created job: {job_id}")
+                    if job_id:  # Only append if not duplicate
+                        jobs_created.append(job_id)
+                        logger.info(f"Created job: {job_id}")
+                    else:
+                        logger.info(f"Skipped duplicate job for {gap['category']}/{gap.get('subcategory', 'general')}")
 
             result["jobs_created"] = jobs_created
             result["data_gaps"] = gaps

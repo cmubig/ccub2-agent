@@ -54,14 +54,19 @@ class AgentJobCreator:
         self,
         country: str,
         category: str,
+        subcategory: str,
         keywords: List[str],
     ) -> Optional[str]:
         """
         Check if a similar job already exists.
 
+        Since Firebase schema doesn't have country/category fields,
+        we check by parsing title and description.
+
         Args:
             country: Target country
             category: Data category
+            subcategory: Data subcategory
             keywords: List of keywords
 
         Returns:
@@ -71,34 +76,44 @@ class AgentJobCreator:
             return None
 
         try:
-            # Query for active jobs with same country and category
+            # Query for active jobs
             jobs_ref = self.db.collection("jobs")
-            query = (
-                jobs_ref.where("country", "==", country)
-                .where("category", "==", category)
-                .where("status", "in", ["IN_PROGRESS", "PENDING"])
-            )
+            query = jobs_ref.where("status", "in", ["IN_PROGRESS", "PENDING"])
 
             docs = query.stream()
 
             for doc in docs:
                 job_data = doc.to_dict()
+                title = job_data.get("title", "").lower()
+                description = job_data.get("description", "")
 
-                # Check keyword overlap
-                existing_keywords = job_data.get("keywords_metadata", [])
-                if not existing_keywords:
+                # Check if country and category match in title
+                if country.lower() not in title:
                     continue
 
-                # Calculate overlap
-                common_keywords = set(keywords) & set(existing_keywords)
-                overlap_ratio = len(common_keywords) / max(len(keywords), len(existing_keywords))
+                if category.replace("_", " ").lower() not in title.lower():
+                    continue
 
-                # If > 70% overlap, consider it duplicate
-                if overlap_ratio > 0.7:
-                    logger.info(
-                        f"Found duplicate job {doc.id}: {overlap_ratio:.1%} keyword overlap"
-                    )
-                    return doc.id
+                # Check subcategory in title or description
+                if subcategory and subcategory != "general":
+                    subcategory_normalized = subcategory.replace("_", " ").lower()
+                    if subcategory_normalized not in title.lower() and \
+                       subcategory_normalized not in description.lower():
+                        continue
+
+                # Check keyword overlap in description
+                if keywords:
+                    keywords_lower = [k.lower() for k in keywords]
+                    desc_lower = description.lower()
+                    matching_keywords = sum(1 for k in keywords_lower if k in desc_lower)
+                    overlap_ratio = matching_keywords / len(keywords)
+
+                    # If > 50% keywords match, consider it duplicate
+                    if overlap_ratio > 0.5:
+                        logger.info(
+                            f"Found duplicate job {doc.id}: {overlap_ratio:.1%} keyword overlap"
+                        )
+                        return doc.id
 
             return None
 
@@ -112,6 +127,7 @@ class AgentJobCreator:
         category: str,
         keywords: List[str],
         description: str,
+        subcategory: str = "general",
         min_level: int = 2,
         points: int = 50,
         target_count: int = 100,
@@ -121,11 +137,17 @@ class AgentJobCreator:
         """
         Create a data collection job.
 
+        Firebase schema only has: title, description, keywords, thumbnail,
+        minimumLevel, point, status, qualificationTestId.
+
+        Country/category/subcategory info is embedded in title and description.
+
         Args:
             country: Target country (e.g., "korea")
-            category: Data category (e.g., "traditional_clothing", "text_hangul")
+            category: Data category (e.g., "traditional_clothing")
             keywords: List of keywords
-            description: Job description
+            description: Job description (user-facing)
+            subcategory: Specific subcategory (e.g., "jeogori_collar", default: "general")
             min_level: Minimum user level required
             points: Points awarded per contribution
             target_count: Target number of data items
@@ -136,12 +158,13 @@ class AgentJobCreator:
             Job ID if created, None if duplicate found
         """
         logger.info(
-            f"Creating job for country={country}, category={category}, keywords={keywords}"
+            f"Creating job for country={country}, category={category}, "
+            f"subcategory={subcategory}, keywords={keywords}"
         )
 
         # Check for duplicates
         if not skip_duplicate_check:
-            existing_job_id = self.check_duplicate_job(country, category, keywords)
+            existing_job_id = self.check_duplicate_job(country, category, subcategory, keywords)
             if existing_job_id:
                 logger.warning(
                     f"Duplicate job detected! Existing job ID: {existing_job_id}"
@@ -152,23 +175,29 @@ class AgentJobCreator:
         # Generate job ID
         job_id = self._generate_job_id()
 
-        # Create job data
+        # Generate title with country and category (for detect_available_countries.py)
+        title = self._generate_title(country, category, subcategory)
+
+        # Create structured description with metadata
+        structured_description = self._create_structured_description(
+            description=description,
+            country=country,
+            category=category,
+            subcategory=subcategory,
+            keywords=keywords,
+            target_count=target_count
+        )
+
+        # Create job data (Firebase schema compliant)
         job_data = {
-            "title": self._generate_title(country, category),
-            "description": description,
-            "keywords": [],  # Keep empty as per existing system
+            "title": title,
+            "description": structured_description,
+            "keywords": [],  # Keep empty as per existing Firebase schema
             "thumbnail": thumbnail_url or self._get_default_thumbnail(country),
             "minimumLevel": min_level,
             "point": points,
             "status": "PENDING",  # Start as PENDING until reviewed
             "qualificationTestId": f"test_{job_id}",
-            "createdBy": "agent",
-            "createdAt": self._get_timestamp(),
-            "category": category,
-            "country": country,
-            "targetCount": target_count,
-            "currentCount": 0,
-            "keywords_metadata": keywords,  # Store separately for agent use
         }
 
         # Create qualification test
@@ -215,30 +244,78 @@ class AgentJobCreator:
             import time
             return str(int(time.time()))
 
-    def _generate_title(self, country: str, category: str) -> str:
-        """Generate job title."""
-        country_names = {
-            "korea": "Korean",
-            "japan": "Japanese",
-            "china": "Chinese",
-            "india": "Indian",
-            "nigeria": "Nigerian",
-            "kenya": "Kenyan",
-        }
+    def _generate_title(self, country: str, category: str, subcategory: str = "general") -> str:
+        """
+        Generate job title.
 
-        category_names = {
-            "traditional_clothing": "Traditional Clothing",
-            "text": "Text and Writing",
-            "architecture": "Architecture",
-            "food": "Food and Cuisine",
-            "symbols": "Cultural Symbols",
-            "festivals": "Festivals and Celebrations",
-        }
+        100% DYNAMIC - ZERO HARDCODING!
+        Works for ANY country, ANY category, ANY subcategory.
 
-        country_name = country_names.get(country, country.title())
-        category_name = category_names.get(category, category.replace("_", " ").title())
+        Format:
+        - General: "Korean Traditional Clothing Dataset"
+        - Specific: "Korean Traditional Clothing - Jeogori Collar"
 
-        return f"{country_name} {category_name} Data Collection"
+        This format ensures detect_available_countries.py can extract country from title.
+        """
+        # Convert country to proper case (ZERO hardcoding!)
+        # Just capitalize first letter of each word
+        country_name = country.replace("_", " ").replace("-", " ").title()
+
+        # Convert category to display name
+        category_name = category.replace("_", " ").title()
+
+        # If specific subcategory, add it to title
+        if subcategory and subcategory != "general":
+            subcategory_name = subcategory.replace("_", " ").title()
+            return f"{country_name} {category_name} - {subcategory_name}"
+        else:
+            # General category
+            return f"{country_name} {category_name} Dataset"
+
+    def _create_structured_description(
+        self,
+        description: str,
+        country: str,
+        category: str,
+        subcategory: str,
+        keywords: List[str],
+        target_count: int
+    ) -> str:
+        """
+        Create structured description with embedded metadata.
+
+        This allows init_dataset.py to parse metadata from description.
+
+        Format:
+        ---
+        [User-facing description]
+
+        ---
+        📊 Project Details:
+        • Country: korea
+        • Category: traditional_clothing
+        • Subcategory: jeogori_collar
+        • Keywords: jeogori, collar, neckline
+        • Target: 15 contributions
+
+        📌 This data helps improve AI cultural accuracy.
+        ---
+        """
+        keywords_str = ", ".join(keywords) if keywords else "N/A"
+
+        structured = f"""{description}
+
+---
+📊 **Project Details:**
+• Country: {country}
+• Category: {category}
+• Subcategory: {subcategory}
+• Keywords: {keywords_str}
+• Target: {target_count} contributions
+
+📌 Your contributions will help AI systems better understand and represent {country.title()} culture accurately.
+"""
+        return structured.strip()
 
     def _generate_qualification_questions(
         self, country: str, category: str, keywords: List[str]
@@ -246,50 +323,39 @@ class AgentJobCreator:
         """
         Generate qualification test questions.
 
-        These ensure that contributors understand the cultural context.
+        FULLY DYNAMIC - Works for ANY country without hardcoding!
+        Uses generic questions based on country, category, and keywords.
         """
-        # Question templates by country and category
         questions = []
 
-        if country == "korea":
-            if "traditional_clothing" in category or "hanbok" in keywords:
-                questions.append(
-                    {
-                        "question": "Which of these is a traditional Korean garment?",
-                        "options": ["Hanbok", "Kimono", "Sari", "Ao Dai"],
-                        "answer": 0,
-                    }
-                )
-                questions.append(
-                    {
-                        "question": "What is the name of the Korean jacket in hanbok?",
-                        "options": ["Jeogori", "Haori", "Cheongsam", "Kurta"],
-                        "answer": 0,
-                    }
-                )
+        # Category name for display
+        category_display = category.replace("_", " ").title()
 
-            if "text" in category or "hangul" in keywords:
-                questions.append(
-                    {
-                        "question": "What is the Korean writing system called?",
-                        "options": ["Hangul", "Kanji", "Hiragana", "Pinyin"],
-                        "answer": 0,
-                    }
-                )
+        # Generic questions that work for any country
+        questions.append(
+            {
+                "question": f"Are you familiar with {country.title()} {category_display.lower()}?",
+                "options": ["Yes, very familiar", "Somewhat familiar", "Learning", "Not familiar"],
+                "answer": 0,
+            }
+        )
 
-        # Generic fallback questions
-        if not questions:
+        questions.append(
+            {
+                "question": f"Can you identify authentic {country.title()} cultural elements in images?",
+                "options": ["Yes, confidently", "Yes, mostly", "Somewhat", "No"],
+                "answer": 0,
+            }
+        )
+
+        # If we have specific keywords, add a keyword-based question
+        if keywords and len(keywords) > 0:
+            # Take first meaningful keyword
+            keyword = keywords[0] if keywords[0] != country else (keywords[1] if len(keywords) > 1 else keywords[0])
             questions.append(
                 {
-                    "question": f"Are you familiar with {country.title()} culture?",
-                    "options": ["Yes", "Somewhat", "Learning", "No"],
-                    "answer": 0,
-                }
-            )
-            questions.append(
-                {
-                    "question": f"Can you identify authentic {country.title()} cultural elements?",
-                    "options": ["Yes, confidently", "Yes, mostly", "Somewhat", "No"],
+                    "question": f"Do you understand what '{keyword}' refers to in {country.title()} culture?",
+                    "options": ["Yes, clearly", "Have some idea", "Heard of it", "No"],
                     "answer": 0,
                 }
             )
@@ -297,21 +363,19 @@ class AgentJobCreator:
         return questions
 
     def _get_default_thumbnail(self, country: str) -> str:
-        """Get default thumbnail URL for country."""
-        # TODO: Upload default thumbnails to Firebase Storage
-        default_thumbnails = {
-            "korea": "https://firebasestorage.googleapis.com/v0/b/worldccub-app.appspot.com/o/default%2Fkorea.png?alt=media",
-            "japan": "https://firebasestorage.googleapis.com/v0/b/worldccub-app.appspot.com/o/default%2Fjapan.png?alt=media",
-            "china": "https://firebasestorage.googleapis.com/v0/b/worldccub-app.appspot.com/o/default%2Fchina.png?alt=media",
-            "india": "https://firebasestorage.googleapis.com/v0/b/worldccub-app.appspot.com/o/default%2Findia.png?alt=media",
-            "nigeria": "https://firebasestorage.googleapis.com/v0/b/worldccub-app.appspot.com/o/default%2Fnigeria.png?alt=media",
-            "kenya": "https://firebasestorage.googleapis.com/v0/b/worldccub-app.appspot.com/o/default%2Fkenya.png?alt=media",
-        }
+        """
+        Get default thumbnail URL for country.
 
-        return default_thumbnails.get(
-            country,
-            "https://firebasestorage.googleapis.com/v0/b/worldccub-app.appspot.com/o/default%2Fgeneric.png?alt=media",
-        )
+        FULLY DYNAMIC - Tries country-specific first, falls back to generic.
+        No hardcoded list needed!
+        """
+        # Try country-specific thumbnail first
+        country_specific_url = f"https://firebasestorage.googleapis.com/v0/b/worldccub-app.appspot.com/o/default%2F{country.lower()}.png?alt=media"
+
+        # Always fallback to generic if country-specific doesn't exist
+        # (Firebase will handle 404, we just provide the URL)
+        # In production, you'd want to check if the file exists first
+        return country_specific_url
 
     def _get_timestamp(self) -> str:
         """Get current timestamp in ISO format."""

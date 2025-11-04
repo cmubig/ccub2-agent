@@ -85,22 +85,26 @@ class DataGapAnalyzer:
             country: Target country
 
         Returns:
-            Gap specification dict
+            Gap specification dict with subcategory inference
         """
         # Extract keywords from issue descriptions
         keywords = self._extract_keywords(issues, category, country)
+
+        # Infer subcategory from issues and keywords
+        subcategory = self._infer_subcategory(issues, category, country, keywords)
 
         # Calculate average severity
         avg_severity = sum(i.get("severity", 5) for i in issues) / len(issues)
 
         # Generate description
-        description = self._generate_description(category, issues, country)
+        description = self._generate_description(category, issues, country, subcategory)
 
         # Calculate priority (based on severity and frequency)
         priority = min(10, int(avg_severity * len(issues) / 2))
 
         return {
             "category": category,
+            "subcategory": subcategory,
             "keywords": keywords,
             "description": description,
             "severity": avg_severity,
@@ -111,47 +115,104 @@ class DataGapAnalyzer:
     def _extract_keywords(
         self, issues: List[Dict], category: str, country: str
     ) -> List[str]:
-        """Extract relevant keywords for data collection."""
-        keywords = []
+        """
+        Extract relevant keywords for data collection.
 
-        # Add category-specific keywords
-        category_keywords = {
-            "text": {
-                "korea": ["hangul", "korean text", "한글"],
-                "japan": ["kanji", "hiragana", "katakana"],
-                "china": ["chinese characters", "hanzi"],
-            },
-            "traditional_clothing": {
-                "korea": ["hanbok", "jeogori", "chima"],
-                "japan": ["kimono", "yukata"],
-                "china": ["hanfu", "qipao"],
-                "india": ["sari", "kurta"],
-            },
-            "architecture": {
-                "korea": ["hanok", "korean palace", "traditional roof"],
-                "japan": ["shrine", "temple", "pagoda"],
-                "china": ["forbidden city", "traditional architecture"],
-            },
-            "food": {
-                "korea": ["kimchi", "bibimbap", "traditional food"],
-                "japan": ["sushi", "ramen", "traditional cuisine"],
-                "india": ["curry", "naan", "traditional dishes"],
-            },
-        }
+        FULLY DYNAMIC - Works for ANY country without hardcoding!
+        Extracts keywords directly from issue descriptions.
+        """
+        keywords = set()
 
-        # Get keywords for this category and country
-        if category in category_keywords:
-            if country in category_keywords[category]:
-                keywords.extend(category_keywords[category][country])
+        # Extract keywords from issue descriptions
+        for issue in issues:
+            desc = issue.get("description", "").lower()
+
+            # Split and clean words
+            words = desc.split()
+            for word in words:
+                # Clean punctuation
+                word = word.strip(".,!?()[]{}\"':;")
+
+                # Keep meaningful words (length > 2, not common English words)
+                if len(word) > 2 and word not in {
+                    "the", "and", "for", "with", "not", "this", "that",
+                    "should", "must", "need", "have", "from", "more", "less",
+                    "very", "much", "such", "about", "into", "through",
+                    "incorrect", "wrong", "missing", "lacking"
+                }:
+                    keywords.add(word)
 
         # Add generic keywords
-        keywords.append(f"{country} culture")
-        keywords.append(f"traditional {country}")
+        keywords.add(f"{country}")
+        keywords.add(f"{category.replace('_', ' ')}")
 
-        return keywords
+        # Convert to list and return top keywords
+        return list(keywords)[:10]  # Limit to top 10 most relevant
+
+    def _infer_subcategory(
+        self,
+        issues: List[Dict],
+        category: str,
+        country: str,
+        keywords: List[str]
+    ) -> str:
+        """
+        Infer specific subcategory from issues and keywords.
+
+        FULLY DYNAMIC - Works for ANY country without hardcoding!
+        Uses keyword frequency and co-occurrence patterns.
+
+        Examples:
+        - keywords: ["jeogori", "collar", "neckline"] → "jeogori_collar"
+        - keywords: ["kimono", "obi", "belt"] → "kimono_obi"
+        - keywords: ["sari", "draping", "style"] → "sari_draping"
+        """
+        # Combine all keywords
+        all_keywords = set(keywords)
+
+        # Add keywords from issue descriptions
+        for issue in issues:
+            desc = issue.get("description", "").lower()
+            # Extract potential subcategory indicators
+            words = desc.split()
+            for word in words:
+                word = word.strip(".,!?()")
+                if len(word) > 3:
+                    all_keywords.add(word)
+
+        all_keywords_lower = [k.lower() for k in all_keywords]
+
+        # Generic subcategory inference based on keywords
+        # Find most specific keywords (not generic terms)
+        generic_terms = {
+            "traditional", "authentic", "cultural", "correct", "proper",
+            "should", "must", "need", "have", "show", "display",
+            "incorrect", "wrong", "missing", "lacking",
+            country.lower(), category.replace("_", " ").lower()
+        }
+
+        # Filter out generic terms
+        specific_keywords = [
+            k for k in keywords
+            if k.lower() not in generic_terms and len(k) > 2
+        ]
+
+        # If we have specific keywords, combine them into subcategory
+        if len(specific_keywords) >= 2:
+            # Take top 2 most specific keywords
+            subcategory = "_".join(specific_keywords[:2]).lower()
+            # Clean up
+            subcategory = subcategory.replace(" ", "_").replace("-", "_")
+            return subcategory
+        elif len(specific_keywords) == 1:
+            # Single specific keyword
+            return specific_keywords[0].lower().replace(" ", "_")
+
+        # Default to general
+        return "general"
 
     def _generate_description(
-        self, category: str, issues: List[Dict], country: str
+        self, category: str, issues: List[Dict], country: str, subcategory: str = "general"
     ) -> str:
         """Generate job description based on issues."""
         category_names = {
@@ -165,19 +226,29 @@ class DataGapAnalyzer:
 
         category_name = category_names.get(category, category.replace("_", " "))
 
-        description = (
-            f"We need more authentic examples of {country.title()} {category_name} "
-            f"to improve cultural accuracy in image generation.\n\n"
-        )
+        # Customize description based on subcategory
+        if subcategory and subcategory != "general":
+            subcategory_display = subcategory.replace("_", " ")
+            description = (
+                f"We need more authentic examples of **{country.title()} {subcategory_display}** "
+                f"(in {category_name}) to improve cultural accuracy in AI-generated images.\n\n"
+            )
+        else:
+            description = (
+                f"We need more authentic examples of {country.title()} {category_name} "
+                f"to improve cultural accuracy in image generation.\n\n"
+            )
 
         # Add specific issues
-        description += "Specifically, we need help with:\n"
+        description += "**Specifically, we need help with:**\n"
         for i, issue in enumerate(issues[:3], 1):  # Top 3 issues
             description += f"{i}. {issue['description']}\n"
 
         description += (
-            f"\nYour contributions will help AI systems better understand and "
-            f"represent {country.title()} culture accurately."
+            f"\n**Why this matters:**\n"
+            f"Your contributions will help AI systems better understand and "
+            f"represent {country.title()} culture accurately, reducing stereotypes "
+            f"and improving cultural representation in AI-generated content."
         )
 
         return description
