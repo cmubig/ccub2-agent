@@ -4,14 +4,14 @@
   "dimension": 512,
   "num_images": 328,
   "categories": [
-    "urban",
+    "architecture",
+    "arts",
+    "food",
     "traditional_clothing",
     "people",
-    "architecture",
-    "nature",
-    "festivals",
-    "arts",
     "uncategorized",
-    "food"
+    "nature",
+    "urban",
+    "festivals"
   ]
 }

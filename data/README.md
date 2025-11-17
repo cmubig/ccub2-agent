@@ -1,44 +1,50 @@
 # Data Directory
 
-This directory contains the contributions data that will be processed during initialization.
+This directory contains all project data, both committed and generated.
 
-## Files
+## Committed Files (in git)
 
-- **_contributions.csv** - Raw contributions data from WorldCCUB app
+- **_contributions.csv** - Raw contributions data from WorldCCUB app (607KB)
+  - Fallback data source when Firebase Admin SDK is unavailable
   - Contains image URLs, captions, categories, and metadata
-  - This file should be committed to the repository
 
-## Generated Data (Not in Repository)
+- **_jobs.csv** - Job listings for data collection (80KB)
+  - Used by the agent to create new data collection jobs
+  - Contains category, country, and target information
 
-The following will be generated during initialization:
+## Generated Data (excluded from git)
+
+The following directories are auto-generated during initialization and excluded from git:
 
 ```
 data/
-├── country_packs/
-│   └── korea/
-│       ├── approved_dataset.json          # Processed contributions
-│       ├── approved_dataset_enhanced.json # VLM-enhanced captions
-│       └── images/                        # Downloaded images (338 files)
+├── country_packs/korea/
+│   ├── approved_dataset.json          # Processed contributions (306KB)
+│   ├── approved_dataset_enhanced.json # VLM-enhanced captions (459KB)
+│   └── images/                        # Downloaded images (338 files, 696MB)
 ├── cultural_knowledge/
-│   └── korea_knowledge.json               # Extracted cultural knowledge
-├── cultural_index/
-│   └── korea/                             # Text RAG index (FAISS)
-└── clip_index/
-    └── korea/                             # Image similarity index (CLIP)
+│   └── korea_knowledge.json           # Extracted cultural knowledge (949KB)
+├── cultural_index/korea/
+│   ├── faiss.index                    # Text RAG index (493KB)
+│   └── metadata.jsonl
+├── clip_index/korea/
+│   ├── clip.index                     # Image similarity index (657KB)
+│   └── clip_metadata.jsonl
+└── hf_cache/                          # HuggingFace model cache (150GB)
 ```
 
-All generated data is excluded from git (see `.gitignore`).
+All large files and generated data are excluded from git (see `.gitignore`).
 
 ## Initialization
 
-To generate the required data files, run:
+All scripts use `PROJECT_ROOT/data/` by default. To initialize:
 
 ```bash
-python scripts/init_dataset.py --country korea
+python scripts/01_setup/init_dataset.py --country korea
 ```
 
-Or simply run the main script, which will offer to initialize automatically:
+Or run any test script, which will offer to initialize automatically:
 
 ```bash
-python scripts/test_model_agnostic_editing.py
+python scripts/04_testing/test_model_agnostic_editing.py
 ```

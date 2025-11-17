@@ -1,7 +1,11 @@
 {
+  "index_type": "faiss.IndexFlatIP",
+  "dimension": 384,
+  "total_vectors": 1277,
   "model_name": "sentence-transformers/all-MiniLM-L6-v2",
-  "embedding_dim": 384,
-  "chunk_count": 328,
-  "country": "korea",
-  "source": "country_pack"
+  "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+  "sources": [
+    "image_knowledge"
+  ],
+  "last_updated": "1762360296.3748941"
 }
