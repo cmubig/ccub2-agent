@@ -33,11 +33,11 @@ def check_status(data_dir: Path, country: str) -> dict:
         'contributions_csv': (PROJECT_ROOT / "data" / "_contributions.csv").exists(),
         'approved_dataset': (country_pack_dir / "approved_dataset.json").exists(),
         'images_dir': (country_pack_dir / "images").exists() and
-                      len(list((country_pack_dir / "images").glob("*.jpg"))) > 0,
+                      len(list((country_pack_dir / "images").glob("**/*.jpg"))) > 0,
         'enhanced_dataset': (country_pack_dir / "approved_dataset_enhanced.json").exists(),
         'cultural_knowledge': (data_dir / "cultural_knowledge" / f"{country}_knowledge.json").exists(),
         'text_index': (data_dir / "cultural_index" / country / "faiss.index").exists(),
-        'clip_index': (data_dir / "clip_index" / country / "faiss.index").exists(),
+        'clip_index': (data_dir / "clip_index" / country / "clip.index").exists(),
     }
 
     # Check Firebase connectivity
@@ -487,8 +487,8 @@ Examples:
     parser.add_argument(
         '--data-dir',
         type=Path,
-        default=Path.home() / "ccub2-agent-data",
-        help='Data directory (default: ~/ccub2-agent-data)'
+        default=PROJECT_ROOT / "data",
+        help='Data directory (default: PROJECT_ROOT/data)'
     )
     parser.add_argument(
         '--skip-images',

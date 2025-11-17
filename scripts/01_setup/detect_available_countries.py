@@ -228,10 +228,10 @@ def get_country_display_name(country: str) -> str:
     Falls back to capitalized country name if not in mapping.
     """
     display_names = {
-        'korea': 'Korea (한국)',
-        'japan': 'Japan (日本)',
-        'china': 'China (中国)',
-        'india': 'India (भारत)',
+        'korea': 'Korea',
+        'japan': 'Japan',
+        'china': 'China',
+        'india': 'India',
         'usa': 'USA',
         'nigeria': 'Nigeria',
         'kenya': 'Kenya',

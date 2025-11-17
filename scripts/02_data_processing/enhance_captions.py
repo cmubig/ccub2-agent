@@ -3,7 +3,7 @@
 Enhance SNS-style captions to cultural descriptions using Qwen3-VL.
 
 Converts:
-"늦은 저녁, 창덕궁에서 아름다운 우리나라의 한복을 입고!"
+"Beautiful hanbok at Changdeokgung Palace in the evening!"
 → "Traditional Korean hanbok worn at Changdeokgung Palace,
    featuring authentic design, colors, and structure"
 
@@ -233,17 +233,17 @@ def main():
     parser.add_argument(
         '--dataset',
         type=Path,
-        help='Dataset path (default: ~/ccub2-agent-data/country_packs/{country}/approved_dataset.json)'
+        help='Dataset path (default: PROJECT_ROOT/data/country_packs/{country}/approved_dataset.json)'
     )
     parser.add_argument(
         '--images-dir',
         type=Path,
-        help='Images directory (default: ~/ccub2-agent-data/country_packs/{country}/images)'
+        help='Images directory (default: PROJECT_ROOT/data/country_packs/{country}/images)'
     )
     parser.add_argument(
         '--output',
         type=Path,
-        help='Output path (default: ~/ccub2-agent-data/country_packs/{country}/approved_dataset_enhanced.json)'
+        help='Output path (default: PROJECT_ROOT/data/country_packs/{country}/approved_dataset_enhanced.json)'
     )
     parser.add_argument(
         '--country',
@@ -267,12 +267,14 @@ def main():
     args = parser.parse_args()
 
     # Set default paths if not provided
+    import sys
+    PROJECT_ROOT = Path(__file__).parent.parent.parent
     if args.dataset is None:
-        args.dataset = Path.home() / f"ccub2-agent-data/country_packs/{args.country}/approved_dataset.json"
+        args.dataset = PROJECT_ROOT / f"data/country_packs/{args.country}/approved_dataset.json"
     if args.images_dir is None:
-        args.images_dir = Path.home() / f"ccub2-agent-data/country_packs/{args.country}/images"
+        args.images_dir = PROJECT_ROOT / f"data/country_packs/{args.country}/images"
     if args.output is None:
-        args.output = Path.home() / f"ccub2-agent-data/country_packs/{args.country}/approved_dataset_enhanced.json"
+        args.output = PROJECT_ROOT / f"data/country_packs/{args.country}/approved_dataset_enhanced.json"
 
     enhance_dataset_captions(
         dataset_path=args.dataset,

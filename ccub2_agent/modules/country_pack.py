@@ -227,7 +227,8 @@ class CountryDataPack:
         logger.info(f"Updating country pack for {self.country}")
 
         if fetch_from_firebase:
-            # TODO: Implement Firebase fetching
+            # Firebase fetching not yet implemented
+            # Use scripts/01_setup/init_dataset.py instead
             logger.info("Fetching approved data from Firebase...")
             # approved_data = fetch_approved_data(self.country)
             # self._save_approved_dataset(approved_data)
