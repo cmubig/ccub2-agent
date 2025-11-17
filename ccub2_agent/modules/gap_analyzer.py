@@ -239,10 +239,54 @@ class DataGapAnalyzer:
                 f"to improve cultural accuracy in image generation.\n\n"
             )
 
-        # Add specific issues
+        # Add specific issues (filter out generic scoring messages)
         description += "**Specifically, we need help with:**\n"
-        for i, issue in enumerate(issues[:3], 1):  # Top 3 issues
-            description += f"{i}. {issue['description']}\n"
+
+        # Filter for meaningful issues (exclude generic scoring messages)
+        meaningful_issues = []
+        for issue in issues:
+            desc = issue.get('description', '')
+
+            # Skip generic scoring messages
+            if any(skip_phrase in desc.lower() for skip_phrase in [
+                'needs improvement (',
+                'score:',
+                '/10',
+                'cultural accuracy needs',
+                'prompt alignment needs'
+            ]):
+                continue
+
+            # Prefer detailed issues
+            if issue.get('is_detailed') or len(desc) > 50:
+                meaningful_issues.append(issue)
+
+        # If no meaningful issues found, take first non-scoring issue
+        if not meaningful_issues:
+            meaningful_issues = [i for i in issues if len(i.get('description', '')) > 30][:1]
+
+        # Add meaningful issues to description
+        for i, issue in enumerate(meaningful_issues[:3], 1):  # Top 3 meaningful issues
+            desc = issue['description']
+
+            # Truncate very long descriptions and clean up
+            if len(desc) > 200:
+                # Take first sentence or first 200 chars
+                first_sentence = desc.split('.')[0] if '.' in desc[:200] else desc[:200]
+                desc = first_sentence.strip() + '...'
+
+            # Remove "SPECIFIC problems:" prefix if present
+            desc = desc.replace('SPECIFIC problems:', '').strip()
+
+            # Clean up numbered lists (remove leading numbers)
+            if desc.startswith(('1.', '2.', '3.', '4.', '5.')):
+                desc = desc[2:].strip()
+
+            description += f"{i}. {desc}\n"
+
+        # If no issues were added, add a generic message
+        if not meaningful_issues:
+            description += "General improvements to cultural authenticity and accuracy.\n"
 
         description += (
             f"\n**Why this matters:**\n"

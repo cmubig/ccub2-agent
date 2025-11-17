@@ -79,6 +79,21 @@ class VLMCulturalDetector:
         else:
             logger.warning("No text knowledge base provided - using basic detection")
 
+        # Load structured cultural knowledge (korea_knowledge.json)
+        self.structured_knowledge = {}
+        if index_dir:
+            knowledge_file = index_dir.parent.parent / "cultural_knowledge" / f"{index_dir.name}_knowledge.json"
+            if knowledge_file.exists():
+                import json
+                with open(knowledge_file) as f:
+                    data = json.load(f)
+                    self.structured_knowledge = {
+                        k['item_id']: k for k in data.get('knowledge', [])
+                    }
+                logger.info(f"Loaded {len(self.structured_knowledge)} structured knowledge entries")
+            else:
+                logger.warning(f"Structured knowledge not found at {knowledge_file}")
+
         # Optional: Load CLIP RAG for reference image retrieval
         self.clip_rag: Optional[CLIPImageRAG] = None
         if clip_index_dir and clip_index_dir.exists():
@@ -109,6 +124,9 @@ class VLMCulturalDetector:
         country: str,
         editing_prompt: Optional[str] = None,
         category: Optional[str] = None,
+        iteration_number: int = 0,
+        previous_cultural_score: Optional[int] = None,
+        previous_prompt_score: Optional[int] = None,
     ) -> List[Dict]:
         """
         Detect cultural issues in a generated image.
@@ -119,6 +137,9 @@ class VLMCulturalDetector:
             country: Target country
             editing_prompt: Optional editing instruction
             category: Optional category for context
+            iteration_number: Current iteration number for context
+            previous_cultural_score: Previous cultural score for comparison
+            previous_prompt_score: Previous prompt score for comparison
 
         Returns:
             List of detected issues with:
@@ -158,13 +179,16 @@ class VLMCulturalDetector:
             else:
                 context = ref_context
 
-        # Get VLM scores
+        # Get VLM scores with iteration context
         cultural_score, prompt_score = self.vlm.evaluate_cultural_scores(
             image_path=image_path,
             prompt=prompt,
             editing_prompt=editing_prompt or "",
             context=context,
             country=country,
+            iteration_number=iteration_number,
+            previous_cultural_score=previous_cultural_score,
+            previous_prompt_score=previous_prompt_score,
         )
 
         # Convert scores to issues
@@ -267,19 +291,30 @@ class VLMCulturalDetector:
 
     def _extract_concepts_from_prompt(self, prompt: str, country: str) -> List[str]:
         """Extract cultural concepts from prompt."""
-        # Simple keyword extraction
-        # TODO: Use VLM for better extraction
+        # Dynamic keyword extraction from prompt
+        # Extract cultural terms from the prompt itself
         keywords = []
 
-        # Category-specific keywords
-        if "hanbok" in prompt.lower():
-            keywords.append("hanbok")
-        if "kimchi" in prompt.lower():
-            keywords.append("kimchi")
-        if "palace" in prompt.lower() or "temple" in prompt.lower():
-            keywords.append("traditional_architecture")
-        if "festival" in prompt.lower():
-            keywords.append("festival")
+        # Split prompt into words and look for potential cultural terms
+        words = prompt.lower().split()
+
+        # General category mapping (country-agnostic)
+        category_keywords = {
+            'architecture': ['palace', 'temple', 'building', 'shrine', 'pagoda', 'mosque', 'cathedral'],
+            'food': ['food', 'dish', 'cuisine', 'meal', 'cooking'],
+            'clothing': ['clothing', 'dress', 'garment', 'attire', 'costume', 'robe'],
+            'festival': ['festival', 'celebration', 'ceremony', 'ritual'],
+        }
+
+        # Map prompt words to categories
+        for word in words:
+            for category, terms in category_keywords.items():
+                if word in terms:
+                    keywords.append(category)
+                    break
+
+        # Remove duplicates
+        keywords = list(set(keywords))
 
         return keywords
 
@@ -293,8 +328,7 @@ class VLMCulturalDetector:
         if not self.kb:
             return []
 
-        # Simple search
-        # TODO: Implement proper concept search
+        # Concept search
         try:
             docs = self.kb.retrieve(f"{concept} {country}", top_k=10)
             # Filter for relevant docs
@@ -315,58 +349,180 @@ class VLMCulturalDetector:
         context: str,
     ) -> List[Dict]:
         """
-        Detect category-specific cultural issues using DYNAMIC question generation.
+        Detect category-specific cultural issues using DETAILED VLM analysis.
 
-        Uses Cultural Metric's EnhancedQuestionGenerator to create questions
-        based on cultural context, not hardcoded templates.
+        Uses our cultural knowledge base to ask VLM SPECIFIC questions.
         """
         issues = []
 
-        # Dynamic question generation using Cultural Metric approach
-        # Create a sample for question generation
-        from enhanced_cultural_metric_pipeline import EnhancedCulturalEvalSample, RetrievedDoc
+        # IMPROVED: Ask VLM to analyze with SPECIFIC cultural knowledge
+        if context and len(context.strip()) > 50:
+            # We have cultural knowledge - use it!
+            detailed_analysis_prompt = self._build_detailed_analysis_prompt(
+                prompt, country, category, context
+            )
 
-        sample = EnhancedCulturalEvalSample(
-            uid="detection",
-            group_id="detection",
-            step="detection",
-            prompt=prompt,
-            country=country,
-            image_path=image_path,
-            category=category,
-        )
+            # Get detailed description of problems from VLM
+            try:
+                from PIL import Image
+                img = Image.open(image_path)
 
-        # Parse context into docs
-        docs = []
-        if context:
-            for line in context.split('\n'):
-                if line.strip() and not line.startswith('[Doc'):
-                    docs.append(RetrievedDoc(
-                        text=line.strip(),
-                        score=1.0,
-                        metadata={"category": category}
-                    ))
+                # Use VLM's query method with context
+                # FIXED: Increased from 300 to 800 tokens for complete analysis
+                detailed_problems = self.vlm.query_with_context(
+                    image=img,
+                    query=detailed_analysis_prompt,
+                    context=context,
+                    max_tokens=800
+                )
 
-        # Generate dynamic questions using LLM (if available)
-        # For now, use fallback templates but structured properly
-        # TODO: Initialize question generator in __init__ for true dynamic generation
+                # Parse the VLM's detailed response
+                if detailed_problems and len(detailed_problems.strip()) > 10:
+                    # FIXED: Remove duplicate/repetitive lines from VLM hallucination
+                    cleaned_problems = self._deduplicate_vlm_analysis(detailed_problems.strip())
 
-        # Fallback: Use smart template selection based on cultural knowledge
-        template_questions = self._generate_smart_questions(prompt, country, category, context)
+                    # Add as a comprehensive issue with details
+                    issues.append({
+                        "type": "incorrect",
+                        "category": category,
+                        "description": cleaned_problems,
+                        "severity": 9,
+                        "is_detailed": True,  # Flag for prompt adapter to use directly
+                    })
 
-        for question, expected in template_questions:
-            answer = self.vlm.answer(image_path, question, context)
+                    if self.debug:
+                        logger.info(f"VLM detailed analysis: {cleaned_problems[:200]}...")
+            except Exception as e:
+                logger.warning(f"Detailed VLM analysis failed: {e}, falling back to yes/no questions")
 
-            # If answer doesn't match expected, it's an issue
-            if answer != expected and answer != "ambiguous":
-                issues.append({
-                    "type": "incorrect" if expected == "yes" else "missing",
-                    "category": category,
-                    "description": question.replace("?", ""),
-                    "severity": 7,
-                })
+        # Only use yes/no questions as fallback if detailed analysis didn't find issues
+        if not issues or not any(i.get("is_detailed") for i in issues):
+            template_questions = self._generate_smart_questions(prompt, country, category, context)
+
+            for question, expected in template_questions:
+                answer = self.vlm.answer(image_path, question, context)
+
+                # If answer doesn't match expected, it's an issue
+                if answer != expected and answer != "ambiguous":
+                    # Ask follow-up for specific details instead of using generic question
+                    try:
+                        from PIL import Image
+                        img = Image.open(image_path)
+
+                        followup_prompt = f"Based on the {country} {category} in this image, what specifically is wrong or missing? Describe the exact cultural problems you see in 2-3 sentences."
+                        specific_desc = self.vlm.query_with_context(
+                            image=img,
+                            query=followup_prompt,
+                            context=context,
+                            max_tokens=300
+                        )
+
+                        # Use specific description if we got meaningful response
+                        description = specific_desc.strip() if specific_desc and len(specific_desc.strip()) > 30 else question.replace("?", "")
+
+                        if self.debug:
+                            logger.info(f"Follow-up question result: {description[:150]}...")
+
+                    except Exception as e:
+                        logger.warning(f"Follow-up question failed: {e}, using generic description")
+                        description = question.replace("?", "")
+
+                    issues.append({
+                        "type": "incorrect" if expected == "yes" else "missing",
+                        "category": category,
+                        "description": description,
+                        "severity": 7,
+                    })
 
         return issues
+
+    def _build_detailed_analysis_prompt(
+        self,
+        prompt: str,
+        country: str,
+        category: str,
+        context: str,
+    ) -> str:
+        """
+        Build a detailed analysis prompt that extracts SPECIFIC cultural issues.
+
+        Returns a prompt that asks VLM to describe exactly what's wrong.
+        """
+        # Extract cultural elements from context
+        cultural_elements = self._extract_specific_elements_from_context(context, category, country)
+
+        analysis_prompt = f"""Analyze this image of {country} {category} and identify SPECIFIC incorrect elements.
+
+Expected elements for authentic {country} {category}:
+{cultural_elements}
+
+Task: List what is WRONG or MISSING in this image. Be SPECIFIC about:
+1. Which traditional elements are incorrect or missing
+2. What colors, shapes, or styles are wrong
+3. Any elements from other cultures that don't belong
+
+Format your answer as a clear list of specific problems. DO NOT say generic things like "cultural accuracy is low". Instead, provide specific details about:
+- Missing or incorrect traditional elements (e.g., collar styles, decorative patterns, fabric types)
+- Wrong colors, shapes, or proportions compared to authentic examples
+- Elements from other cultures that don't belong
+Be as specific as possible about what is wrong and what should be there instead.
+
+SPECIFIC problems:"""
+
+        return analysis_prompt
+
+    def _extract_specific_elements_from_context(
+        self,
+        context: str,
+        category: str,
+        country: str,
+    ) -> str:
+        """
+        Extract specific cultural elements using STRUCTURED KNOWLEDGE.
+
+        Priority:
+        1. Structured knowledge (korea_knowledge.json) - detailed, categorized
+        2. RAG context - text snippets
+        3. Fallback - generic description
+        """
+        elements_text = []
+
+        # PRIORITY 1: Use structured knowledge if available
+        if self.structured_knowledge and category:
+            category_knowledge = [
+                k for k in self.structured_knowledge.values()
+                if k.get('category') == category and k.get('country') == country
+            ]
+
+            if category_knowledge:
+                # Build comprehensive description from structured data
+                for entry in category_knowledge[:3]:  # Top 3 most relevant
+                    if 'visual_features' in entry:
+                        elements_text.append(f"Visual Features: {entry['visual_features'][:200]}")
+                    if 'colors_patterns' in entry:
+                        elements_text.append(f"Colors/Patterns: {entry['colors_patterns'][:150]}")
+                    if 'materials_textures' in entry:
+                        elements_text.append(f"Materials: {entry['materials_textures'][:150]}")
+
+                if elements_text:
+                    return '\n'.join(elements_text)
+
+        # PRIORITY 2: Use RAG context
+        if context and len(context.strip()) > 50:
+            elements = []
+            lines = context.split('\n')
+            for line in lines:
+                line = line.strip()
+                if not line or line.startswith('[Doc'):
+                    continue
+                if len(line) > 20:
+                    elements.append(f"- {line}")
+
+            if elements:
+                return '\n'.join(elements[:10])
+
+        # PRIORITY 3: Fallback
+        return f"Traditional {category} elements specific to {country} culture"
 
     def _generate_smart_questions(
         self,
@@ -442,6 +598,9 @@ class VLMCulturalDetector:
         prompt: str,
         country: str,
         editing_prompt: Optional[str] = None,
+        iteration_number: int = 0,
+        previous_cultural_score: Optional[int] = None,
+        previous_prompt_score: Optional[int] = None,
     ) -> Tuple[int, int]:
         """
         Get cultural quality scores.
@@ -451,6 +610,9 @@ class VLMCulturalDetector:
             prompt: Generation prompt
             country: Target country
             editing_prompt: Optional editing instruction
+            iteration_number: Current iteration number for context
+            previous_cultural_score: Previous cultural score for comparison
+            previous_prompt_score: Previous prompt score for comparison
 
         Returns:
             Tuple of (cultural_representative, prompt_alignment) scores (1-10)
@@ -476,7 +638,34 @@ class VLMCulturalDetector:
             editing_prompt=editing_prompt or "",
             context=context,
             country=country,
+            iteration_number=iteration_number,
+            previous_cultural_score=previous_cultural_score,
+            previous_prompt_score=previous_prompt_score,
         )
+
+    def _deduplicate_vlm_analysis(self, text: str) -> str:
+        """Remove duplicate/repetitive lines from VLM hallucination."""
+        lines = text.split('\n')
+        seen = set()
+        unique_lines = []
+
+        for line in lines:
+            # Normalize line for comparison (remove numbers, extra spaces)
+            normalized = line.strip()
+            # Remove leading numbers like "1. ", "2. ", etc.
+            import re
+            normalized = re.sub(r'^\d+\.\s*', '', normalized)
+
+            # Skip if we've seen this exact content before
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                unique_lines.append(line)
+
+                # Limit to first 10 unique issues
+                if len(unique_lines) >= 10:
+                    break
+
+        return '\n'.join(unique_lines)
 
 
 def create_vlm_detector(

@@ -29,6 +29,12 @@ class EditingContext:
     country: str
     category: str
     preserve_identity: bool = True
+    # Iteration tracking for focused prompting
+    iteration_number: int = 0
+    previous_iteration_issues: Optional[List[Dict]] = None
+    fixed_issues: Optional[List] = None
+    remaining_issues: Optional[List[Dict]] = None
+    previous_editing_prompt: Optional[str] = None
 
 
 class UniversalPromptAdapter:
@@ -157,12 +163,9 @@ class UniversalPromptAdapter:
 
     def _adapt_qwen(self, instruction: str, context: Optional[EditingContext]) -> str:
         """
-        Qwen format: Detailed, specific, structured
+        Qwen format: Simple, sequential, actionable
 
-        Qwen excels at:
-        - Text rendering (use quotes for text)
-        - Complex semantic understanding
-        - Preserving specific attributes
+        KEY: Qwen works best with 1-2 SIMPLE fixes at a time, not long analysis.
         """
         prompt_parts = []
 
@@ -174,22 +177,35 @@ class UniversalPromptAdapter:
 
         prompt_parts.append(f"Modify {subject}.")
 
-        # 2. Specific changes (Qwen loves details!)
+        # 2. Sequential fixes (MAX 2 simple instructions)
         if context and context.detected_issues:
-            for issue in context.detected_issues[:3]:
-                desc = issue.get('description', '')
+            # Extract TOP 2 actionable fixes from VLM analysis
+            detailed_issues = [i for i in context.detected_issues if i.get('is_detailed')]
+            if detailed_issues:
+                desc = detailed_issues[0].get('description', '')
                 if desc:
-                    fix = self._issue_to_specific_fix(desc, context)
-                    prompt_parts.append(fix)
+                    # Convert VLM analysis to simple numbered fixes
+                    simple_fixes = self._extract_simple_fixes(desc, max_fixes=2)
+                    if simple_fixes:
+                        prompt_parts.append(simple_fixes)
+                    else:
+                        # Last resort: convert first sentence to instruction
+                        # FIXED: Increased from 150 to 500 chars to avoid truncation
+                        first_issue = desc.split('\n')[0][:500]
+                        prompt_parts.append(self._to_simple_instruction(first_issue, context))
+            else:
+                # Generic issues - convert to specific fixes (limit to 1 for focused editing)
+                for issue in context.detected_issues[:1]:
+                    desc = issue.get('description', '')
+                    if desc:
+                        fix = self._issue_to_specific_fix(desc, context)
+                        prompt_parts.append(fix)
         else:
-            prompt_parts.append(instruction)
+            # Fallback to raw instruction (simplified)
+            simple_inst = instruction.split('.')[0]  # First sentence only
+            prompt_parts.append(simple_inst)
 
-        # 3. Cultural requirements (structured)
-        if context and context.cultural_elements:
-            cultural_desc = context.cultural_elements
-            prompt_parts.append(f"Cultural requirements: {cultural_desc}")
-
-        # 4. Preservation directives (Qwen-style: specific attributes)
+        # 3. Preservation (CRITICAL for Qwen)
         if context and context.preserve_identity:
             preservation = (
                 "Retain the original: facial identity, skin tone, eye color, "
@@ -198,11 +214,11 @@ class UniversalPromptAdapter:
             )
             prompt_parts.append(preservation)
 
-        # 5. Quality enhancement (Qwen magic prompt)
+        # 4. Quality directive
         prompt_parts.append("Maintain high detail, realistic textures, and cultural authenticity.")
 
         final_prompt = " ".join(prompt_parts)
-        logger.debug(f"Qwen prompt: {final_prompt}")
+        logger.debug(f"Qwen prompt ({len(final_prompt)} chars): {final_prompt[:200]}...")
         return final_prompt
 
     def _adapt_sd35(self, instruction: str, context: Optional[EditingContext]) -> str:
@@ -301,12 +317,20 @@ class UniversalPromptAdapter:
     # Helper methods
 
     def _extract_cultural_modifications(self, instruction: str, context: Optional[EditingContext]) -> str:
-        """Extract what needs to be culturally modified."""
+        """
+        Extract what needs to be culturally modified.
+        Uses iteration-aware logic to focus on remaining issues.
+        """
         if not context or not context.detected_issues:
             return instruction
 
+        # Use iteration-aware instruction if we have iteration context
+        if context.iteration_number > 0 and context.remaining_issues:
+            return self._generate_iteration_aware_instruction(context)
+
+        # First iteration or no iteration context: use detected issues (limit to 1 for focused editing)
         modifications = []
-        for issue in context.detected_issues[:3]:
+        for issue in context.detected_issues[:1]:
             desc = issue.get('description', '')
             if desc:
                 if "missing" in issue.get('type', ''):
@@ -321,15 +345,260 @@ class UniversalPromptAdapter:
 
     def _issue_to_specific_fix(self, issue_desc: str, context: EditingContext) -> str:
         """Convert issue description to specific fix instruction."""
-        if context.category == "traditional_clothing":
-            if "collar" in issue_desc.lower():
-                return f"Replace the collar with traditional {context.country} garment collar style."
-            elif "fabric" in issue_desc.lower() or "tight" in issue_desc.lower():
-                return f"Make the fabric more flowing and layered, matching traditional {context.country} textile style."
-            elif "waist" in issue_desc.lower():
-                return f"Adjust the waistline to authentic {context.country} traditional placement."
+        issue_lower = issue_desc.lower()
 
-        return issue_desc.replace("not", "make it").replace("lacks", "add")
+        # If description is already specific and long, use it directly
+        if len(issue_desc) > 80 and not issue_lower.endswith("?"):
+            return issue_desc
+
+        # Handle generic question-style descriptions using RAG context
+        if "incorrect or missing" in issue_lower or "wrong" in issue_lower:
+            if "traditional elements" in issue_lower:
+                # Try to extract specific elements from RAG cultural_elements
+                if context.cultural_elements:
+                    specific_elements = self._extract_key_cultural_elements(context.cultural_elements, context.category)
+                    if specific_elements:
+                        return f"Add and correct: {', '.join(specific_elements[:3])}"
+
+                return f"Add and correct traditional {context.country} {context.category} elements"
+            elif "colors" in issue_lower or "shapes" in issue_lower or "proportions" in issue_lower:
+                # Try to extract specific color/shape info from RAG
+                if context.cultural_elements:
+                    color_info = self._extract_color_info(context.cultural_elements)
+                    if color_info:
+                        return f"Correct colors and proportions: {color_info}"
+
+                return f"Correct the colors, shapes, and proportions to match authentic {context.country} {context.category}"
+            elif "elements from other cultures" in issue_lower:
+                return f"Remove non-{context.country} cultural elements"
+
+        # Category-specific fixes
+        if context.category == "traditional_clothing":
+            if "collar" in issue_lower:
+                return f"Replace the collar with traditional {context.country} garment collar style"
+            elif "fabric" in issue_lower or "tight" in issue_lower:
+                return f"Make the fabric more flowing and layered, matching traditional {context.country} textile style"
+            elif "waist" in issue_lower:
+                return f"Adjust the waistline to authentic {context.country} traditional placement"
+
+        # Generic transformations
+        fix = issue_desc.replace("not", "make it").replace("lacks", "add")
+        fix = fix.replace("incorrect", "correct").replace("missing", "add")
+        fix = fix.replace("wrong", "fix")
+
+        # Make it imperative if not already
+        if not any(fix.startswith(word) for word in ["Add", "Correct", "Fix", "Change", "Remove", "Replace", "Make", "Adjust"]):
+            fix = f"Fix: {fix}"
+
+        return fix
+
+    def _extract_key_cultural_elements(self, cultural_text: str, category: str) -> List[str]:
+        """Extract specific cultural elements from RAG context."""
+        elements = []
+        lower_text = cultural_text.lower()
+
+        # Extract key terms based on category
+        if category == "traditional_clothing":
+            keywords = ["collar", "sleeve", "waist", "fabric", "pattern", "embroidery", "color", "layers"]
+            for keyword in keywords:
+                if keyword in lower_text:
+                    # Try to extract context around the keyword
+                    idx = lower_text.find(keyword)
+                    snippet = cultural_text[max(0, idx-20):min(len(cultural_text), idx+60)]
+                    # Clean and add
+                    cleaned = snippet.strip().split('.')[0].strip()
+                    if len(cleaned) > 10 and len(cleaned) < 80:
+                        elements.append(cleaned)
+
+        return elements[:5]  # Return up to 5 specific elements
+
+    def _extract_color_info(self, cultural_text: str) -> str:
+        """Extract color information from RAG context."""
+        lower_text = cultural_text.lower()
+
+        # Look for color mentions
+        color_keywords = ["red", "blue", "green", "yellow", "white", "black", "pink", "vibrant", "bright", "pastel"]
+        found_colors = [color for color in color_keywords if color in lower_text]
+
+        if found_colors:
+            return f"use traditional colors like {', '.join(found_colors[:3])}"
+
+        return ""
+
+    def _generate_iteration_aware_instruction(self, context: Optional[EditingContext]) -> str:
+        """
+        Generate instructions that focus on UNFIXED issues from previous iterations.
+
+        Logic:
+        - Iteration 0: Address all detected issues
+        - Iteration 1+: Focus on remaining_issues, acknowledge fixed_issues
+        """
+        if not context:
+            return "Improve cultural accuracy"
+
+        # First iteration: address all issues
+        if context.iteration_number == 0 or not context.remaining_issues:
+            issues_to_fix = context.detected_issues
+            prefix = ""
+        else:
+            # Later iterations: focus on what's still wrong
+            issues_to_fix = context.remaining_issues
+
+            # Build acknowledgment of progress
+            if context.fixed_issues and len(context.fixed_issues) > 0:
+                prefix = f"Good progress on previous iteration. "
+            else:
+                prefix = "Previous attempt did not fix the issues. "
+
+            prefix += "NOW focus on these remaining problems: "
+
+        # Extract specific fixes from remaining issues (limit to 1 for focused editing)
+        modifications = []
+        for issue in issues_to_fix[:1]:  # Top 1 issue for sequential fixing
+            if isinstance(issue, dict):
+                desc = issue.get('description', '')
+                severity = issue.get('severity', 5)
+
+                # Prioritize severe issues
+                if severity >= 8:
+                    fix = self._issue_to_specific_fix(desc, context)
+                    modifications.append(f"**CRITICAL**: {fix}")
+                elif severity >= 5:
+                    fix = self._issue_to_specific_fix(desc, context)
+                    modifications.append(fix)
+            else:
+                modifications.append(str(issue)[:100])
+
+        if modifications:
+            return prefix + "; ".join(modifications)
+        else:
+            return f"Perfect the {context.country} {context.category} cultural accuracy"
+
+    def _extract_top_fixes(self, vlm_analysis: str, max_fixes: int = 2) -> str:
+        """
+        Extract top N actionable fixes from VLM's detailed analysis.
+
+        VLM gives numbered lists like:
+        1. **Problem**: description
+        2. **Problem**: description
+
+        We extract the top N and simplify to SHORT instructions.
+        """
+        import re
+
+        # Find numbered items
+        numbered_items = re.findall(r'\d+\.\s+\*\*([^*]+)\*\*:\s*([^.]+\.)', vlm_analysis)
+
+        if not numbered_items:
+            # Try alternative format
+            numbered_items = re.findall(r'\d+\.\s+([^:]+):\s*([^.]+\.)', vlm_analysis)
+
+        if numbered_items and len(numbered_items) >= max_fixes:
+            # Convert to simple instructions
+            fixes = []
+            for i, (problem, description) in enumerate(numbered_items[:max_fixes], 1):
+                # Simplify: "Incorrect X" -> "Fix X"
+                simple = self._simplify_fix(problem, description)
+                fixes.append(f"{i}. {simple}")
+
+            return " ".join(fixes)
+
+        # Fallback: take first 200 chars
+        return vlm_analysis[:200].strip()
+
+    def _simplify_fix(self, problem: str, description: str) -> str:
+        """
+        Convert VLM problem to simple I2I instruction.
+        Uses VLM's specific description directly - works for ANY cultural element
+        (food, architecture, clothing, nature, festivals, etc.)
+        """
+        # Use the VLM's specific description as-is
+        # The VLM already provides detailed, category-specific guidance
+        full_text = f"{problem}. {description}".strip()
+
+        # Remove only VLM filler phrases, keep all cultural details
+        full_text = full_text.replace("The problem is ", "")
+        full_text = full_text.replace("The issue is ", "")
+
+        return full_text[:800].strip()
+
+    def _extract_simple_fixes(self, vlm_analysis: str, max_fixes: int = 2) -> str:
+        """
+        Extract simple actionable fixes from VLM analysis.
+
+        Handles both formats:
+        - "1. Problem description"
+        - "1. **Problem**: description"
+
+        Returns: "1. Simple fix 2. Simple fix"
+        """
+        import re
+
+        # Try to find numbered items (both formats)
+        # Format 1: "1. **Title**: description"
+        bold_items = re.findall(r'(\d+)\.\s+\*\*([^*]+)\*\*[:\s]+([^.\n]+)', vlm_analysis)
+
+        # Format 2: "1. Regular text..."
+        if not bold_items:
+            # Capture full multi-line items (including bullet points) until next numbered item
+            plain_items = re.findall(r'(\d+)\.\s+([^\d]+?)(?=\n\d+\.|$)', vlm_analysis, re.DOTALL)
+            if plain_items:
+                # Convert to (num, problem, desc) format
+                bold_items = [(num, text.strip(), text) for num, text in plain_items]
+
+        if bold_items and len(bold_items) >= 1:
+            fixes = []
+            for i, item in enumerate(bold_items[:max_fixes], 1):
+                if len(item) == 3:
+                    num, problem, desc = item
+                else:
+                    num, combined = item[0], item[1]
+                    problem = desc = combined
+
+                # Convert to simple fix
+                simple = self._problem_to_simple_fix(problem, desc)
+                fixes.append(f"{i}. {simple}")
+
+            return " ".join(fixes)
+
+        # Fallback: extract first meaningful sentence
+        sentences = [s.strip() for s in vlm_analysis.split('.') if len(s.strip()) > 20]
+        if sentences:
+            return self._to_simple_instruction(sentences[0])
+
+        return ""
+
+    def _problem_to_simple_fix(self, problem: str, description: str = "") -> str:
+        """
+        Convert VLM problem description to actionable instruction.
+        Uses the VLM's specific analysis directly - no pattern matching or hardcoding.
+        """
+        # Use the full description from VLM as-is (it's already specific and actionable)
+        full_text = f"{problem}. {description}".strip()
+
+        # Remove redundant phrases but keep the specific cultural details
+        full_text = full_text.replace("The image shows ", "")
+        full_text = full_text.replace("This image ", "")
+        full_text = full_text.replace("I notice that ", "")
+
+        # Return the VLM's specific description (up to 800 chars to preserve bullet points)
+        return full_text[:800].strip()
+
+    def _to_simple_instruction(self, text: str, context: Optional[EditingContext] = None) -> str:
+        """Convert any text to simple editing instruction."""
+        # Remove common VLM phrases
+        text = text.replace("The image shows", "").replace("The garment", "garment")
+        text = text.replace("is incorrect", "").replace("is wrong", "")
+        text = text.strip()
+
+        # Make it imperative
+        if not text.startswith(("Change", "Fix", "Add", "Remove", "Transform", "Make")):
+            if context and context.category:
+                text = f"Fix the {context.category}: {text}"
+            else:
+                text = f"Fix: {text}"
+
+        return text[:100].strip()
 
     def _extract_keywords(self, text: str, max_words: int = 20) -> str:
         """Extract key terms from cultural context."""

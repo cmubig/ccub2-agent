@@ -49,17 +49,19 @@ class BaseImageEditor(ABC):
         image: Union[Image.Image, Path, str],
         instruction: str,
         reference_image: Optional[Union[Image.Image, Path, str]] = None,
+        reference_metadata: Optional[Dict[str, Any]] = None,
         strength: float = 0.8,
         **kwargs
     ) -> Image.Image:
         """
-        Edit image based on instruction.
+        Edit image based on instruction with optional cultural guidance.
 
         Args:
-            image: Input image to edit
-            instruction: Text instruction for editing
-            reference_image: Optional reference image for style/content
-            strength: Edit strength (0-1)
+            image: Input image
+            instruction: Editing instruction
+            reference_image: Reference image path (optional)
+            reference_metadata: RAG metadata with cultural knowledge (optional)
+            strength: Edit strength 0-1
             **kwargs: Model-specific parameters
 
         Returns:
@@ -105,7 +107,7 @@ class QwenImageEditor(BaseImageEditor):
         "sdxl": "stabilityai/stable-diffusion-xl-base-1.0",
     }
 
-    def __init__(self, model_name: str = "Qwen/Qwen-Image-Edit-2509", device: str = "auto", t2i_model: str = "sdxl", **kwargs):
+    def __init__(self, model_name: str = "Qwen/Qwen-Image-Edit-2509", device: str = "auto", t2i_model: str = "sd35", **kwargs):
         super().__init__(model_name, device, **kwargs)
         self.t2i_model = t2i_model
         # Allow custom T2I model IDs
@@ -116,7 +118,7 @@ class QwenImageEditor(BaseImageEditor):
         """Initialize Qwen model."""
         from diffusers import QwenImageEditPlusPipeline
 
-        logger.info(f"Loading Qwen Image Editor: {self.model_name}")
+        logger.info(f"Loading Qwen Image Editor Plus (2509): {self.model_name}")
 
         # Use bfloat16 for better memory efficiency (if CUDA available)
         dtype = torch.bfloat16 if self.device == "cuda" else torch.float32
@@ -140,36 +142,159 @@ class QwenImageEditor(BaseImageEditor):
         image: Union[Image.Image, Path, str],
         instruction: str,
         reference_image: Optional[Union[Image.Image, Path, str]] = None,
+        reference_metadata: Optional[Dict[str, Any]] = None,
         strength: float = 0.8,
+        progress_callback: Optional[callable] = None,
         **kwargs
     ) -> Image.Image:
-        """Edit image with Qwen."""
+        """
+        Edit image with Qwen using RAG-based cultural guidance.
+
+        Args:
+            image: Input image to edit
+            instruction: Editing instruction
+            reference_image: Reference image path (optional, for logging)
+            reference_metadata: RAG metadata with cultural knowledge
+            strength: Editing strength (not directly used by Qwen pipeline)
+            progress_callback: Optional callback for progress updates (step, total_steps)
+            **kwargs: Additional parameters
+        """
         image = self._load_image(image)
 
-        # Qwen supports multi-image input
-        images = [image]
+        # Load reference image if provided
+        ref_img = None
         if reference_image is not None:
             ref_img = self._load_image(reference_image)
-            images.append(ref_img)
-            instruction = f"Edit the first image based on this instruction: {instruction}. Use the second image as a reference for cultural accuracy."
+            logger.info(f"✓ Reference image loaded for multi-image editing")
 
-        # Default parameters (optimized for memory)
+        # SMART CULTURAL CONTEXT: Extract only issue-relevant information
+        if reference_image is not None and reference_metadata is not None:
+            # Extract issue keywords to filter relevant cultural info
+            issue_keywords = self._extract_issue_keywords(instruction) if instruction else set()
+
+            # Get the most detailed description
+            full_description = (
+                reference_metadata.get('description_enhanced') or
+                reference_metadata.get('description') or
+                reference_metadata.get('caption', '')
+            )
+
+            # Smart filtering: Extract only relevant sentences
+            relevant_description = self._filter_relevant_sentences(
+                full_description, issue_keywords
+            ) if issue_keywords and full_description else full_description
+
+            # Extract only relevant key features (matching issue keywords)
+            all_key_features = reference_metadata.get('key_features', [])
+            relevant_features = [
+                feat for feat in all_key_features
+                if any(keyword in feat.lower() for keyword in issue_keywords)
+            ] if issue_keywords else all_key_features[:3]  # Max 3 features
+
+            # Build focused cultural context
+            if relevant_description or relevant_features:
+                reference_context = "\n\nReference (authentic cultural example):"
+
+                if relevant_description:
+                    # Truncate to ~200 chars for focus
+                    truncated_desc = relevant_description[:200] + "..." if len(relevant_description) > 200 else relevant_description
+                    reference_context += f"\n{truncated_desc}"
+
+                if relevant_features:
+                    features_str = ', '.join(relevant_features[:3])  # Max 3
+                    reference_context += f"\nKey features: {features_str}"
+
+                instruction = instruction + reference_context
+                logger.info(f"✓ Added focused cultural guidance ({len(relevant_features)} features)")
+                if issue_keywords:
+                    logger.debug(f"Issue keywords: {list(issue_keywords)[:5]}")
+            else:
+                logger.warning("⚠ No relevant cultural information found in metadata")
+        elif reference_image is not None:
+            logger.warning("⚠ Reference image provided but no metadata - cultural guidance limited")
+
+        # MULTI-IMAGE EDITING: Use reference image if provided
+        # To prevent copying reference, we use high CFG scale to prioritize instruction
+        if ref_img is not None:
+            # Add strong preservation instruction to prevent reference copying
+            preservation_note = "\n\nIMPORTANT: Preserve the ORIGINAL image's main subject, composition, pose, background, and layout. The reference image is ONLY for cultural accuracy guidance - do not copy its content or composition."
+            instruction = instruction + preservation_note
+
+            # Pass as list: [image_to_edit, reference_image]
+            image_input = [image, ref_img]
+            logger.info(f"✓ Using multi-image editing with preservation instruction")
+        else:
+            # Single image mode
+            image_input = image
+
+        num_steps = kwargs.get('num_inference_steps', 40)
+
+        # Adaptive CFG scale: Higher when using reference to prevent copying
+        default_cfg = 12.0 if ref_img is not None else 4.0
+
         params = {
-            'image': images,
+            'image': image_input,
             'prompt': instruction,
-            'true_cfg_scale': kwargs.get('true_cfg_scale', 4.0),
-            'negative_prompt': kwargs.get('negative_prompt', ' '),
-            'num_inference_steps': kwargs.get('num_inference_steps', 15),  # Reduced from 40
+            'true_cfg_scale': kwargs.get('true_cfg_scale', default_cfg),
             'guidance_scale': kwargs.get('guidance_scale', 1.0),
+            'negative_prompt': kwargs.get('negative_prompt', ' '),
+            'num_inference_steps': num_steps,
             'generator': torch.manual_seed(kwargs.get('seed', 42)),
         }
+
+        # Add progress callback if provided
+        if progress_callback is not None:
+            def diffusers_callback(pipe, step_index, timestep, callback_kwargs):
+                progress_callback(step_index + 1, num_steps)
+                return callback_kwargs
+            params['callback_on_step_end'] = diffusers_callback
 
         with torch.inference_mode():
             output = self.pipe(**params)
 
         return output.images[0]
 
-    def generate(self, prompt: str, width: int = 1024, height: int = 1024, **kwargs) -> Image.Image:
+    def _extract_issue_keywords(self, instruction: str) -> set:
+        """Extract keywords from issues to filter relevant cultural info."""
+        # Common stopwords to exclude
+        stopwords = {
+            'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+            'of', 'with', 'by', 'from', 'is', 'are', 'was', 'were', 'be', 'been',
+            'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would',
+            'should', 'could', 'may', 'might', 'must', 'can', 'this', 'that',
+            'these', 'those', 'it', 'its', 'image', 'fix', 'improve', 'needs',
+            'improvement', 'accuracy', 'cultural', 'traditional', 'authentic'
+        }
+
+        # Extract words (3+ chars, not stopwords)
+        words = instruction.lower().split()
+        keywords = {
+            word.strip('.,!?():;')
+            for word in words
+            if len(word) > 2 and word.lower() not in stopwords
+        }
+
+        return keywords
+
+    def _filter_relevant_sentences(self, text: str, keywords: set, max_sentences: int = 2) -> str:
+        if not text or not keywords:
+            return text
+
+        sentences = [s.strip() for s in text.replace('\n', ' ').split('.') if s.strip()]
+
+        scored = []
+        for sent in sentences:
+            sent_lower = sent.lower()
+            score = sum(1 for kw in keywords if kw in sent_lower)
+            if score > 0:
+                scored.append((score, sent))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        top_sentences = [sent for _, sent in scored[:max_sentences]]
+
+        return '. '.join(top_sentences) + '.' if top_sentences else text[:200]
+
+    def generate(self, prompt: str, width: int = 1024, height: int = 1024, progress_callback: Optional[callable] = None, **kwargs) -> Image.Image:
         """
         Generate image from prompt (T2I mode).
 
@@ -203,14 +328,25 @@ class QwenImageEditor(BaseImageEditor):
         width = min(width, 768)
         height = min(height, 768)
 
+        num_steps = kwargs.get('num_inference_steps', 25 if self.t2i_model == "sdxl" else 28)
+
+        params = {
+            'prompt': prompt,
+            'width': width,
+            'height': height,
+            'num_inference_steps': num_steps,
+            'generator': torch.manual_seed(kwargs.get('seed', 42)),
+        }
+
+        # Add progress callback if provided
+        if progress_callback is not None:
+            def diffusers_callback(pipe, step_index, timestep, callback_kwargs):
+                progress_callback(step_index + 1, num_steps)
+                return callback_kwargs
+            params['callback_on_step_end'] = diffusers_callback
+
         with torch.inference_mode():
-            output = t2i_pipe(
-                prompt=prompt,
-                width=width,
-                height=height,
-                num_inference_steps=kwargs.get('num_inference_steps', 25 if self.t2i_model == "sdxl" else 28),
-                generator=torch.manual_seed(kwargs.get('seed', 42)),
-            )
+            output = t2i_pipe(**params)
 
         # Clean up T2I pipe
         del t2i_pipe
@@ -258,26 +394,23 @@ class SDXLControlNetEditor(BaseImageEditor):
         image: Union[Image.Image, Path, str],
         instruction: str,
         reference_image: Optional[Union[Image.Image, Path, str]] = None,
+        reference_metadata: Optional[Dict[str, Any]] = None,
         strength: float = 0.8,
         **kwargs
     ) -> Image.Image:
-        """Edit image with SDXL ControlNet."""
         import cv2
         import numpy as np
 
         image = self._load_image(image)
 
-        # Extract canny edges for ControlNet
         image_np = np.array(image)
         edges = cv2.Canny(image_np, 100, 200)
         edges = Image.fromarray(edges)
 
-        # If reference image provided, blend features
         prompt = instruction
         if reference_image is not None:
             ref_img = self._load_image(reference_image)
             prompt = f"{instruction}. Style and details similar to reference image provided."
-            # In practice, use IP-Adapter or other methods to inject reference
 
         params = {
             'prompt': prompt,
@@ -320,6 +453,7 @@ class FluxControlNetEditor(BaseImageEditor):
     def __init__(self, model_name: str = "black-forest-labs/FLUX.1-dev", device: str = "auto", **kwargs):
         super().__init__(model_name, device, **kwargs)
         self.controlnet_model = kwargs.get('controlnet_model', self.DEFAULT_CONTROLNET)
+        self.t2i_model = kwargs.get('t2i_model', 'flux')
         self._init_model()
 
     def _init_model(self):
@@ -328,38 +462,44 @@ class FluxControlNetEditor(BaseImageEditor):
 
         logger.info(f"Loading Flux ControlNet: {self.model_name}")
 
-        # Load Flux ControlNet
         controlnet = FluxControlNetModel.from_pretrained(
             self.controlnet_model,
             torch_dtype=torch.bfloat16 if self.device == "cuda" else torch.float32,
+            token=True,
         )
 
         self.pipe = FluxControlNetPipeline.from_pretrained(
             self.model_name,
             controlnet=controlnet,
             torch_dtype=torch.bfloat16 if self.device == "cuda" else torch.float32,
-        ).to(self.device)
+            token=True,
+        )
 
-        logger.info(f"✓ Flux ControlNet loaded on {self.device}")
+        if self.device == "cuda":
+            self.pipe.enable_model_cpu_offload()
+            logger.info("✓ Flux ControlNet loaded with CPU offload")
+        else:
+            self.pipe = self.pipe.to(self.device)
+            logger.info(f"✓ Flux ControlNet loaded on {self.device}")
 
     def edit(
         self,
         image: Union[Image.Image, Path, str],
         instruction: str,
         reference_image: Optional[Union[Image.Image, Path, str]] = None,
+        reference_metadata: Optional[Dict[str, Any]] = None,
         strength: float = 0.8,
         **kwargs
     ) -> Image.Image:
-        """Edit image with Flux ControlNet."""
         import cv2
         import numpy as np
 
         image = self._load_image(image)
 
-        # Extract canny edges
         image_np = np.array(image)
         edges = cv2.Canny(image_np, 100, 200)
-        edges = Image.fromarray(edges)
+        edges_rgb = cv2.cvtColor(edges, cv2.COLOR_GRAY2RGB)
+        edges = Image.fromarray(edges_rgb)
 
         prompt = instruction
         if reference_image is not None:
@@ -377,21 +517,72 @@ class FluxControlNetEditor(BaseImageEditor):
         return output.images[0]
 
     def generate(self, prompt: str, width: int = 1024, height: int = 1024, **kwargs) -> Image.Image:
-        """Generate image from prompt."""
-        from diffusers import FluxPipeline
+        """Generate image from prompt using specified T2I model."""
+        if self.t2i_model == 'sd35':
+            from diffusers import StableDiffusion3Pipeline
 
-        flux_pipe = FluxPipeline.from_pretrained(
-            self.model_name,
-            torch_dtype=torch.bfloat16 if self.device == "cuda" else torch.float32,
-        ).to(self.device)
+            pipe = StableDiffusion3Pipeline.from_pretrained(
+                "stabilityai/stable-diffusion-3.5-medium",
+                torch_dtype=torch.bfloat16 if self.device == "cuda" else torch.float32,
+                token=True,
+            )
 
-        output = flux_pipe(
-            prompt=prompt,
-            width=width,
-            height=height,
-            num_inference_steps=kwargs.get('num_inference_steps', 28),
-            generator=torch.manual_seed(kwargs.get('seed', 42)),
-        )
+            if self.device == "cuda":
+                pipe.enable_model_cpu_offload()
+            else:
+                pipe = pipe.to(self.device)
+
+            output = pipe(
+                prompt=prompt,
+                width=width,
+                height=height,
+                num_inference_steps=kwargs.get('num_inference_steps', 40),
+                guidance_scale=kwargs.get('guidance_scale', 4.5),
+                generator=torch.manual_seed(kwargs.get('seed', 42)),
+            )
+        elif self.t2i_model == 'sdxl':
+            from diffusers import StableDiffusionXLPipeline
+
+            pipe = StableDiffusionXLPipeline.from_pretrained(
+                "stabilityai/stable-diffusion-xl-base-1.0",
+                torch_dtype=torch.bfloat16 if self.device == "cuda" else torch.float32,
+                token=True,
+            )
+
+            if self.device == "cuda":
+                pipe.enable_model_cpu_offload()
+            else:
+                pipe = pipe.to(self.device)
+
+            output = pipe(
+                prompt=prompt,
+                width=width,
+                height=height,
+                num_inference_steps=kwargs.get('num_inference_steps', 40),
+                guidance_scale=kwargs.get('guidance_scale', 7.5),
+                generator=torch.manual_seed(kwargs.get('seed', 42)),
+            )
+        else:
+            from diffusers import FluxPipeline
+
+            pipe = FluxPipeline.from_pretrained(
+                self.model_name,
+                torch_dtype=torch.bfloat16 if self.device == "cuda" else torch.float32,
+                token=True,
+            )
+
+            if self.device == "cuda":
+                pipe.enable_model_cpu_offload()
+            else:
+                pipe = pipe.to(self.device)
+
+            output = pipe(
+                prompt=prompt,
+                width=width,
+                height=height,
+                num_inference_steps=kwargs.get('num_inference_steps', 28),
+                generator=torch.manual_seed(kwargs.get('seed', 42)),
+            )
 
         return output.images[0]
 
@@ -431,47 +622,66 @@ class SD35Editor(BaseImageEditor):
         image: Union[Image.Image, Path, str],
         instruction: str,
         reference_image: Optional[Union[Image.Image, Path, str]] = None,
+        reference_metadata: Optional[Dict[str, Any]] = None,
         strength: float = 0.8,
+        progress_callback: Optional[callable] = None,
         **kwargs
     ) -> Image.Image:
-        """Edit image with SD3.5 (img2img mode)."""
         image = self._load_image(image)
 
-        # SD3.5 has excellent prompt understanding - use natural language
         prompt = instruction
         if reference_image is not None:
             ref_img = self._load_image(reference_image)
             prompt = f"{instruction}. Apply cultural accuracy and styling similar to reference image."
 
-        # SD3.5 img2img parameters
+        num_steps = kwargs.get('num_inference_steps', 28)
+
         params = {
             'prompt': prompt,
             'image': image,
             'strength': strength,
-            'num_inference_steps': kwargs.get('num_inference_steps', 28),
+            'num_inference_steps': num_steps,
             'guidance_scale': kwargs.get('guidance_scale', 7.0),
             'generator': torch.manual_seed(kwargs.get('seed', 42)),
         }
+
+        # Add progress callback if provided
+        if progress_callback is not None:
+            def diffusers_callback(pipe, step_index, timestep, callback_kwargs):
+                progress_callback(step_index + 1, num_steps)
+                return callback_kwargs
+            params['callback_on_step_end'] = diffusers_callback
 
         with torch.inference_mode():
             output = self.pipe(**params)
 
         return output.images[0]
 
-    def generate(self, prompt: str, width: int = 1024, height: int = 1024, **kwargs) -> Image.Image:
+    def generate(self, prompt: str, width: int = 1024, height: int = 1024, progress_callback: Optional[callable] = None, **kwargs) -> Image.Image:
         """Generate image from prompt (T2I mode)."""
         # SD3.5 excels at natural language prompts
         # Use descriptive, concise prompts
 
+        num_steps = kwargs.get('num_inference_steps', 28)
+
+        params = {
+            'prompt': prompt,
+            'width': width,
+            'height': height,
+            'num_inference_steps': num_steps,
+            'guidance_scale': kwargs.get('guidance_scale', 7.0),
+            'generator': torch.manual_seed(kwargs.get('seed', 42)),
+        }
+
+        # Add progress callback if provided
+        if progress_callback is not None:
+            def diffusers_callback(pipe, step_index, timestep, callback_kwargs):
+                progress_callback(step_index + 1, num_steps)
+                return callback_kwargs
+            params['callback_on_step_end'] = diffusers_callback
+
         with torch.inference_mode():
-            output = self.pipe(
-                prompt=prompt,
-                width=width,
-                height=height,
-                num_inference_steps=kwargs.get('num_inference_steps', 28),
-                guidance_scale=kwargs.get('guidance_scale', 7.0),
-                generator=torch.manual_seed(kwargs.get('seed', 42)),
-            )
+            output = self.pipe(**params)
 
         return output.images[0]
 
@@ -527,10 +737,10 @@ class QwenT2IEditor(BaseImageEditor):
         image: Union[Image.Image, Path, str],
         instruction: str,
         reference_image: Optional[Union[Image.Image, Path, str]] = None,
+        reference_metadata: Optional[Dict[str, Any]] = None,
         strength: float = 0.8,
         **kwargs
     ) -> Image.Image:
-        """Qwen-Image is T2I only - editing not supported."""
         raise NotImplementedError(
             "Qwen-Image is a text-to-image model only and does not support image editing. "
             "Use 'qwen' (Qwen-Image-Edit) for I2I editing instead."
@@ -648,24 +858,20 @@ class GeminiImageEditor(BaseImageEditor):
         image: Union[Image.Image, Path, str],
         instruction: str,
         reference_image: Optional[Union[Image.Image, Path, str]] = None,
+        reference_metadata: Optional[Dict[str, Any]] = None,
         strength: float = 0.8,
         **kwargs
     ) -> Image.Image:
-        """Edit image with Gemini (text-and-image-to-image)."""
         from io import BytesIO
 
         image = self._load_image(image)
 
-        # Optimize instruction for Gemini's conversational style
         optimized_instruction = self._optimize_prompt_for_gemini(instruction, is_editing=True)
 
-        # Build content list
         contents = [optimized_instruction, image]
 
-        # If reference image provided, add it to context
         if reference_image is not None:
             ref_img = self._load_image(reference_image)
-            # Gemini can handle multiple images for style transfer/composition
             contents.append(ref_img)
             contents[0] = f"{instruction}. Use styling and cultural elements from the additional reference image provided."
 
@@ -768,7 +974,7 @@ class ImageEditingAdapter:
         'gemini': GeminiImageEditor,
     }
 
-    def __init__(self, model_type: str = 'qwen', model_name: Optional[str] = None, device: str = "auto", t2i_model: str = "sdxl", **kwargs):
+    def __init__(self, model_type: str = 'qwen', model_name: Optional[str] = None, device: str = "auto", t2i_model: str = "sd35", **kwargs):
         """
         Initialize adapter.
 
@@ -785,8 +991,8 @@ class ImageEditingAdapter:
 
         editor_class = self.SUPPORTED_MODELS[model_type]
 
-        # Pass t2i_model to Qwen
-        if model_type == 'qwen':
+        # Pass t2i_model to Qwen and Flux
+        if model_type in ['qwen', 'flux']:
             if model_name:
                 self.editor = editor_class(model_name=model_name, device=device, t2i_model=t2i_model, **kwargs)
             else:
@@ -798,19 +1004,20 @@ class ImageEditingAdapter:
                 self.editor = editor_class(device=device, **kwargs)
 
         self.model_type = model_type
+        self.t2i_model = t2i_model
 
-        logger.info(f"✓ ImageEditingAdapter initialized with {model_type} (T2I: {t2i_model if model_type == 'qwen' else 'N/A'})")
+        logger.info(f"✓ ImageEditingAdapter initialized with {model_type} (T2I: {t2i_model if model_type in ['qwen', 'flux'] else 'N/A'})")
 
     def edit(
         self,
         image: Union[Image.Image, Path, str],
         instruction: str,
         reference_image: Optional[Union[Image.Image, Path, str]] = None,
+        reference_metadata: Optional[Dict[str, Any]] = None,
         strength: float = 0.8,
         **kwargs
     ) -> Image.Image:
-        """Edit image based on instruction."""
-        return self.editor.edit(image, instruction, reference_image, strength, **kwargs)
+        return self.editor.edit(image, instruction, reference_image, reference_metadata, strength, **kwargs)
 
     def generate(self, prompt: str, width: int = 1024, height: int = 1024, **kwargs) -> Image.Image:
         """Generate image from prompt."""
