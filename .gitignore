@@ -36,10 +36,24 @@ ccub2/
 *.swp
 *.swo
 *~
+*.sublime-project
+*.sublime-workspace
 
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb
+
+# Internal documentation (not for public)
+docs/UPDATED_PROJECT_PROPOSAL*.md
+docs/*_KR.md
+docs/FUTURE_WORK.md
+docs/TEST_RESULTS*.md
+docs/BACKGROUND_TESTS_STATUS.md
+docs/FINAL_*.md
+docs/FULL_PIPELINE_EXPLANATION.md
+docs/SYSTEM_ALIGNMENT_COMPLETE.md
+docs/FULL_PROCESS_GUIDE.md
+docs/*.backup
 
 # Config files with secrets
 config/firebase-config.json
@@ -51,15 +65,25 @@ config/*.pem
 firebase-service-account.json
 *service-account*.json
 
-# Data
+# Data (large files and generated data)
 data/country_packs/*/approved_dataset.json
+data/country_packs/*/approved_dataset_enhanced.json
 data/country_packs/*/images/
+data/clip_index/
+data/cultural_index/
+data/cultural_knowledge/
+data/hf_cache/
 data/benchmarks/
+data/*.log
 output/
 outputs/
 experiments/
 logs/
 *.log
+test_outputs/
+gui/outputs/
+*.backup
+*.old
 
 # Large data in scratch (NOT in repo!)
 /scratch/
@@ -93,3 +117,6 @@ ccub2-agent.tar.gz
 # Hugging Face cache (don't commit)
 .cache/
 *.lock
+results/
+*.pyc
+__pycache__/

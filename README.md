@@ -142,7 +142,7 @@ Generative AI models often produce culturally inaccurate images due to:
 
 **5. Self-Improving Loop**
 ```
-User generates → VLM detects gap ("Not enough 저고리 data")
+User generates → VLM detects gap ("Not enough jeogori collar data")
 → System creates Firebase job → Users upload authentic images
 → RAG auto-updates (89% faster!) → Accuracy improves (15% → 95%)
 ```
@@ -200,8 +200,11 @@ pip install -r requirements.txt
 
 ## 📚 Documentation
 
-- [Complete Process Guide](docs/FULL_PROCESS_GUIDE.md) - Detailed workflow explanation
-- [Future Work & Architecture](docs/FUTURE_WORK.md) - Design decisions & roadmap
+- [Quick Start Guide](QUICKSTART.md) - Get started in 30 minutes
+- [Architecture](ARCHITECTURE.md) - System design and component details
+- [FAQ](FAQ.md) - Frequently asked questions
+- [Contributing](CONTRIBUTING.md) - Development setup and guidelines
+- [Changelog](CHANGELOG.md) - Version history and updates
 
 ## 💾 Data Paths
 
@@ -253,6 +256,24 @@ python scripts/extract_cultural_knowledge.py --max-images 5
 ## 📄 License
 
 MIT License - See [LICENSE](LICENSE) file for details.
+
+## 📝 Citation
+
+If you use CCUB2-Agent in your research, please cite our paper:
+
+```bibtex
+@misc{seo2025exposingblindspotsculturalbias,
+      title={Exposing Blindspots: Cultural Bias Evaluation in Generative Image Models},
+      author={Huichan Seo and Sieun Choi and Minki Hong and Yi Zhou and Junseo Kim and Lukman Ismaila and Naome Etori and Mehul Agarwal and Zhixuan Liu and Jihie Kim and Jean Oh},
+      year={2025},
+      eprint={2510.20042},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2510.20042},
+}
+```
+
+**Paper**: [Exposing Blindspots: Cultural Bias Evaluation in Generative Image Models](https://arxiv.org/abs/2510.20042)
 
 ## 📧 Contact
 

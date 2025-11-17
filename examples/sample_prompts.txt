@@ -1,0 +1,23 @@
+# Sample Prompts for Batch Processing
+# Lines starting with # are ignored
+# One prompt per line
+
+# Korean Traditional Clothing
+A person wearing traditional Korean hanbok with vibrant colors
+Traditional Korean wedding hanbok with elegant design
+Korean scholar in traditional hanbok reading at a desk
+
+# Korean Food
+Traditional Korean bibimbap in a stone bowl with colorful vegetables
+Korean kimchi in a traditional ceramic pot
+Korean bulgogi grilling on a traditional barbecue
+
+# Korean Architecture
+Korean traditional palace with ornate roof tiles
+Traditional Korean hanok house with courtyard
+Ancient Korean temple in the mountains
+
+# Korean Culture
+Korean traditional fan dance performance
+Traditional Korean tea ceremony
+Korean traditional mask dance performance
