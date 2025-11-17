@@ -54,7 +54,9 @@ class SimpleCulturalKnowledgeBase:
         meta_path = index_dir / "metadata.jsonl"
         self.metadata = [json.loads(line) for line in meta_path.read_text(encoding="utf-8").splitlines()]
         config = json.loads((index_dir / "index_config.json").read_text(encoding="utf-8"))
-        self.embedder = SentenceTransformer(config["model_name"])
+        # Support both old and new key names for backward compatibility
+        model_name = config.get("model_name") or config.get("embedding_model", "sentence-transformers/all-MiniLM-L6-v2")
+        self.embedder = SentenceTransformer(model_name)
         
         # Section priorities for different categories
         self.section_priorities = {

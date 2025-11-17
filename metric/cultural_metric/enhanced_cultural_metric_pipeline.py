@@ -94,7 +94,9 @@ class EnhancedCulturalKnowledgeBase:
         meta_path = index_dir / "metadata.jsonl"
         self.metadata = [json.loads(line) for line in meta_path.read_text(encoding="utf-8").splitlines()]
         config = json.loads((index_dir / "index_config.json").read_text(encoding="utf-8"))
-        self.embedder = SentenceTransformer(config["model_name"])
+        # Support both old and new key names for backward compatibility
+        model_name = config.get("model_name") or config.get("embedding_model", "sentence-transformers/all-MiniLM-L6-v2")
+        self.embedder = SentenceTransformer(model_name)
         
         # Section priorities for different categories
         self.section_priorities = {
@@ -668,32 +670,57 @@ Return ONLY a JSON object:
             return samples[0].uid, samples[-1].uid, f"Evaluation error: {str(e)}"
 
     def evaluate_cultural_scores(
-        self, 
-        image_path: Path, 
-        prompt: str, 
-        editing_prompt: str, 
+        self,
+        image_path: Path,
+        prompt: str,
+        editing_prompt: str,
         context: str,
-        country: str
+        country: str,
+        iteration_number: int = 0,
+        previous_cultural_score: Optional[int] = None,
+        previous_prompt_score: Optional[int] = None
     ) -> Tuple[int, int]:  # (cultural_representative, prompt_alignment)
         """Evaluate Cultural Representative (1-10) and Prompt Alignment (1-10) scores."""
         try:
             # Use demonym function instead of hardcoded "Chinese"
             dem = demonym(country)
-            eval_question = f"""Rate this image on two aspects (1-10 scale):
 
-Cultural Representative: How well does this image represent {dem} cultural elements? (1=Very Poor, 10=Excellent)
-Prompt Alignment: How well does this image match these prompts? (1=Very Poor, 10=Excellent)
+            # Build iteration context for more accurate scoring
+            iteration_context = ""
+            if iteration_number > 0 and previous_cultural_score is not None:
+                iteration_context = f"""
+ITERATION CONTEXT:
+- This is iteration {iteration_number} (edited version)
+- Previous scores: Cultural={previous_cultural_score}/10, Prompt={previous_prompt_score}/10
+- Edits made: {editing_prompt[:200]}
+- You should score HIGHER if improvements were made, LOWER if issues remain or got worse
+"""
 
-Original Prompt: "{prompt}"
-Editing Instruction: "{editing_prompt}"
+            eval_question = f"""You are a STRICT cultural expert evaluator. Rate this image on a 1-10 scale with HIGH STANDARDS.
+{iteration_context}
+SCORING GUIDELINES:
+- 9-10: Nearly perfect, authentic {dem} cultural representation with NO significant errors
+- 7-8: Good representation with ONLY minor issues
+- 5-6: Noticeable problems or inaccuracies that need fixing
+- 3-4: Multiple serious cultural errors or misrepresentations
+- 1-2: Completely incorrect or inappropriate
 
-Respond with exactly: Cultural:X,Prompt:Y (where X,Y are numbers 1-10)
-Example: Cultural:8,Prompt:7"""
+Examine critically:
+1. Traditional {dem} cultural elements - are they AUTHENTIC and ACCURATE?
+2. Colors, patterns, shapes - do they match REAL {dem} cultural artifacts?
+3. Any elements from other cultures that DON'T belong?
+4. How well it matches the prompt: "{prompt}"
+
+BE CRITICAL. If you find ANY significant errors, the score MUST be 6 or lower.
+If you find multiple severe issues, the score MUST be 4 or lower.
+
+After your analysis, end with: Cultural:X,Prompt:Y
+Example: Cultural:5,Prompt:7"""
 
             # Use the exact same format as answer() function that works
             image = Image.open(image_path).convert("RGB")
             messages = [
-                {"role": "system", "content": "You are an expert evaluator. Respond with format Cultural:X,Prompt:Y where X,Y are 1-10."},
+                {"role": "system", "content": "You are a VERY STRICT cultural expert. Be critical and demanding. High scores (8+) should be RARE and only for truly excellent work. Any significant errors MUST result in scores of 6 or below. Respond with format Cultural:X,Prompt:Y where X,Y are 1-10."},
                 {
                     "role": "user",
                     "content": [
@@ -710,8 +737,8 @@ Example: Cultural:8,Prompt:7"""
             
             with torch.no_grad():
                 generate_ids = self.model.generate(
-                    **inputs, 
-                    max_new_tokens=30,
+                    **inputs,
+                    max_new_tokens=200,  # Increased from 30 to allow proper reasoning
                     do_sample=False,
                     pad_token_id=self.processor.tokenizer.pad_token_id
                 )
@@ -727,21 +754,26 @@ Example: Cultural:8,Prompt:7"""
                 print(f"[DEBUG] Numbers found: {numbers_found}")
             
             # Parse scores - try multiple formats
-            cultural_score = 3  # default
-            prompt_score = 3    # default
-            
+            # FIXED: Better defaults and fallback logic
+            cultural_score = None  # Will be determined by parsing or text analysis
+            prompt_score = None
+
             try:
-                # Method 1: Look for Cultural:X,Prompt:Y format
-                cultural_match = re.search(r'Cultural:(\d+)', output, re.IGNORECASE)
-                prompt_match = re.search(r'Prompt:(\d+)', output, re.IGNORECASE)
+                # Method 1: Look for Cultural:X,Prompt:Y format (strict)
+                cultural_match = re.search(r'Cultural[:\s]+(\d+)', output, re.IGNORECASE)
+                prompt_match = re.search(r'Prompt[:\s]+(\d+)', output, re.IGNORECASE)
                 
                 if cultural_match and prompt_match:
                     cultural_score = int(cultural_match.group(1))
                     prompt_score = int(prompt_match.group(1))
+                    if self.debug:
+                        print(f"[DEBUG] Method 1 (regex) - Cultural:{cultural_score}, Prompt:{prompt_score}")
                 # Method 2: Look for any two numbers
                 elif len(numbers_found) >= 2:
                     cultural_score = int(numbers_found[0])
                     prompt_score = int(numbers_found[1])
+                    if self.debug:
+                        print(f"[DEBUG] Method 2 (numbers) - Cultural:{cultural_score}, Prompt:{prompt_score}")
                 # Method 3: Look for comma-separated numbers
                 elif ',' in output:
                     parts = output.split(',')
@@ -751,6 +783,30 @@ Example: Cultural:8,Prompt:7"""
                         if cultural_nums and prompt_nums:
                             cultural_score = int(cultural_nums[0])
                             prompt_score = int(prompt_nums[0])
+                            if self.debug:
+                                print(f"[DEBUG] Method 3 (comma) - Cultural:{cultural_score}, Prompt:{prompt_score}")
+
+                # FIXED: Fallback - infer from text analysis if parsing failed
+                if cultural_score is None or prompt_score is None:
+                    output_lower = output.lower()
+                    # Positive indicators
+                    if any(word in output_lower for word in ['accurate', 'correct', 'authentic', 'good', 'well', 'proper']):
+                        cultural_score = cultural_score or 7
+                        prompt_score = prompt_score or 7
+                        if self.debug:
+                            print(f"[DEBUG] Positive text detected, using default 7/10")
+                    # Negative indicators
+                    elif any(word in output_lower for word in ['incorrect', 'inaccurate', 'wrong', 'poor', 'lacks', 'missing']):
+                        cultural_score = cultural_score or 4
+                        prompt_score = prompt_score or 4
+                        if self.debug:
+                            print(f"[DEBUG] Negative text detected, using default 4/10")
+                    else:
+                        # Neutral fallback
+                        cultural_score = cultural_score or 5
+                        prompt_score = prompt_score or 5
+                        if self.debug:
+                            print(f"[DEBUG] No clear sentiment, using default 5/10")
                 
                 # Clamp to valid range (1-10 scale)
                 if self.debug:
@@ -776,6 +832,53 @@ Example: Cultural:8,Prompt:7"""
                 traceback.print_exc()
             return 3, 3  # default neutral scores
 
+    def query_with_context(
+        self,
+        image: Image.Image,
+        query: str,
+        context: str,
+        max_tokens: int = 300
+    ) -> str:
+        """
+        Query VLM with detailed context for open-ended answers.
+
+        Args:
+            image: PIL Image
+            query: Question/instruction for VLM
+            context: Cultural context from knowledge base
+            max_tokens: Max response length
+
+        Returns:
+            VLM's detailed response
+        """
+        try:
+            messages = [
+                {"role": "system", "content": "You are a cultural expert analyzing images."},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": f"Cultural Knowledge:\n{context}\n\n{query}"},
+                        {"type": "image", "image": image},
+                    ],
+                },
+            ]
+
+            text_prompt = self.processor.apply_chat_template(messages, add_generation_prompt=True)
+            inputs = self.processor(text=text_prompt, images=image, return_tensors="pt", padding=True).to(self.device)
+            if "attention_mask" not in inputs:
+                inputs["attention_mask"] = torch.ones_like(inputs["input_ids"])
+
+            with torch.inference_mode():
+                outputs = self.model.generate(**inputs, max_new_tokens=max_tokens, do_sample=False)
+                response = self.processor.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
+
+            return response.strip()
+
+        except Exception as e:
+            if self.debug:
+                print(f"[DEBUG] VLM query_with_context failed: {e}")
+            return ""
+
     def answer(self, image_path: Path, question: str, context: str) -> str:
         """Answer a yes/no question about an image."""
         try:
@@ -790,18 +893,18 @@ Example: Cultural:8,Prompt:7"""
                     ],
                 },
             ]
-            
+
             text_prompt = self.processor.apply_chat_template(messages, add_generation_prompt=True)
             inputs = self.processor(text=text_prompt, images=image, return_tensors="pt", padding=True).to(self.device)
             if "attention_mask" not in inputs:
                 inputs["attention_mask"] = torch.ones_like(inputs["input_ids"])
-            
+
             with torch.inference_mode():
                 outputs = self.model.generate(**inputs, max_new_tokens=32, do_sample=False)
                 response = self.processor.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
-            
+
             return self._normalize_answer(response)
-            
+
         except Exception as e:
             if self.debug:
                 print(f"[DEBUG] VLM answer failed for {image_path}: {e}")

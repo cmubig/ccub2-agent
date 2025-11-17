@@ -47,7 +47,7 @@ python cultural_metric_pipeline.py \
   --summary-csv /Users/chan/Downloads/iaseai26/evaluation/outputs/qwen/cultural_metrics_manual_summary.csv \
   --detail-csv /Users/chan/Downloads/iaseai26/evaluation/outputs/qwen/cultural_metrics_manual_detail.csv \
   --question-model openai/gpt-oss-20b \
-  --vlm-model Qwen/Qwen2-VL-7B-Instruct \
+  --vlm-model Qwen/Qwen3-VL-8B-Instruct \
   --max-questions 8 \
   --min-questions 6 \
   --min-negative 2 \
