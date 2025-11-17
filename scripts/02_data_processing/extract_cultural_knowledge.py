@@ -92,51 +92,168 @@ class CulturalKnowledgeExtractor:
 
         logger.info("VLM loaded successfully")
 
+    def _preprocess_image(self, image: Image.Image, max_size: int = 1024) -> Image.Image:
+        """
+        Preprocess image to reduce memory usage.
+        Resize to max_size x max_size while maintaining aspect ratio.
+        Pad with white to make it square.
+
+        Args:
+            image: Input PIL Image
+            max_size: Maximum dimension (default 1024)
+
+        Returns:
+            Preprocessed square PIL Image
+        """
+        # Get original size
+        orig_width, orig_height = image.size
+
+        # Calculate scaling factor to fit within max_size
+        scale = min(max_size / orig_width, max_size / orig_height)
+
+        # Only resize if image is larger than max_size
+        if scale < 1.0:
+            new_width = int(orig_width * scale)
+            new_height = int(orig_height * scale)
+            image = image.resize((new_width, new_height), Image.LANCZOS)
+        else:
+            new_width, new_height = orig_width, orig_height
+
+        # Create square canvas with white background
+        canvas = Image.new('RGB', (max_size, max_size), (255, 255, 255))
+
+        # Paste resized image in center
+        paste_x = (max_size - new_width) // 2
+        paste_y = (max_size - new_height) // 2
+        canvas.paste(image, (paste_x, paste_y))
+
+        return canvas
+
     def extract_knowledge(
         self,
         image_path: Path,
         item_data: Dict,
         country: str,
+        max_retries: int = 3,
     ) -> Optional[CulturalKnowledge]:
         """
-        Extract cultural knowledge from a single image.
+        Extract cultural knowledge from a single image with retry logic.
 
         Args:
             image_path: Path to the image
             item_data: Item metadata from approved_dataset.json
             country: Country name
+            max_retries: Maximum retry attempts
 
         Returns:
-            CulturalKnowledge object or None if extraction fails
+            CulturalKnowledge object or None if all attempts fail
         """
+        category = item_data.get('category', 'general')
+        item_id = item_data.get('id', 'unknown')
+        quality_score = item_data.get('quality_score', 0)
+
+        # Load and preprocess image once
         try:
-            category = item_data.get('category', 'general')
-            item_id = item_data.get('id', 'unknown')
-            quality_score = item_data.get('quality_score', 0)
-
-            # Load image
             image = Image.open(image_path).convert("RGB")
-
-            # Build extraction prompt
-            prompt = self._build_extraction_prompt(category, country, item_data)
-
-            # VLM inference
-            response = self._run_vlm(image, prompt)
-
-            # Parse response
-            knowledge = self._parse_response(
-                response,
-                item_id,
-                category,
-                country,
-                quality_score
-            )
-
-            return knowledge
-
+            orig_size = image.size
+            image = self._preprocess_image(image, max_size=1024)
+            logger.debug(f"Preprocessed {item_id}: {orig_size} -> {image.size}")
         except Exception as e:
-            logger.error(f"Failed to extract knowledge from {image_path}: {e}")
+            logger.error(f"Failed to load image {image_path}: {e}")
             return None
+
+        # Retry strategies
+        strategies = [
+            {'temperature': 0.0, 'max_tokens': 1024, 'desc': 'deterministic'},
+            {'temperature': 0.3, 'max_tokens': 1024, 'desc': 'low temperature'},
+            {'temperature': 0.7, 'max_tokens': 1536, 'desc': 'higher temperature + more tokens'},
+        ]
+
+        last_error = None
+        best_knowledge = None
+
+        for attempt in range(max_retries):
+            try:
+                strategy = strategies[min(attempt, len(strategies) - 1)]
+                logger.debug(f"Attempt {attempt + 1}/{max_retries} for {item_id} ({strategy['desc']})")
+
+                # Build extraction prompt
+                prompt = self._build_extraction_prompt(category, country, item_data)
+
+                # VLM inference with strategy
+                response = self._run_vlm(
+                    image,
+                    prompt,
+                    temperature=strategy['temperature'],
+                    max_tokens=strategy['max_tokens']
+                )
+
+                # Parse response
+                knowledge = self._parse_response(
+                    response,
+                    item_id,
+                    category,
+                    country,
+                    quality_score
+                )
+
+                if knowledge:
+                    # Success - check quality
+                    if not knowledge.extraction_notes:
+                        # Perfect extraction
+                        logger.debug(f"✓ {item_id} extracted successfully on attempt {attempt + 1}")
+                        return knowledge
+                    else:
+                        # Partial extraction - keep trying but save as backup
+                        logger.debug(f"Partial extraction for {item_id} on attempt {attempt + 1}")
+                        if best_knowledge is None:
+                            best_knowledge = knowledge
+
+            except torch.cuda.OutOfMemoryError as e:
+                logger.error(f"CUDA OOM for {image_path} on attempt {attempt + 1}: {e}")
+                last_error = e
+                # Try to recover
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                import time
+                time.sleep(2)  # Wait before retry
+
+            except Exception as e:
+                logger.error(f"Attempt {attempt + 1} failed for {image_path}: {e}")
+                last_error = e
+
+        # All attempts exhausted
+        if best_knowledge:
+            logger.warning(f"Returning partial extraction for {item_id}")
+            return best_knowledge
+        else:
+            logger.error(f"All {max_retries} attempts failed for {item_id}: {last_error}")
+
+            # Last resort: create minimal knowledge from description
+            if item_data.get('description'):
+                logger.info(f"Creating minimal knowledge from description for {item_id}")
+                return CulturalKnowledge(
+                    item_id=item_id,
+                    category=category,
+                    country=country,
+                    visual_features=item_data.get('description', ''),
+                    materials_textures='',
+                    colors_patterns='',
+                    cultural_elements=f"Authentic {country} {category}",
+                    correct_aspects=[],
+                    incorrect_aspects=[],
+                    key_characteristics='',
+                    common_mistakes='',
+                    quality_score=quality_score,
+                    confidence='low',
+                    extraction_notes=f'Failed VLM extraction - using description only. Error: {str(last_error)[:100]}'
+                )
+
+            return None
+
+        # Clear GPU cache
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     def _build_extraction_prompt(
         self,
@@ -205,8 +322,8 @@ Be specific and detailed. Focus on visual, verifiable characteristics."""
 
         return prompt
 
-    def _run_vlm(self, image: Image.Image, prompt: str) -> str:
-        """Run VLM inference."""
+    def _run_vlm(self, image: Image.Image, prompt: str, temperature: float = 0.0, max_tokens: int = 1024) -> str:
+        """Run VLM inference with configurable parameters."""
         messages = [
             {
                 "role": "system",
@@ -235,13 +352,23 @@ Be specific and detailed. Focus on visual, verifiable characteristics."""
         if "attention_mask" not in inputs:
             inputs["attention_mask"] = torch.ones_like(inputs["input_ids"])
 
+        # Configure generation parameters
+        gen_kwargs = {
+            "max_new_tokens": max_tokens,
+            "pad_token_id": self.processor.tokenizer.pad_token_id,
+        }
+
+        if temperature > 0:
+            gen_kwargs.update({
+                "do_sample": True,
+                "temperature": temperature,
+                "top_p": 0.9,
+            })
+        else:
+            gen_kwargs["do_sample"] = False
+
         with torch.no_grad():
-            outputs = self.model.generate(
-                **inputs,
-                max_new_tokens=1024,
-                do_sample=False,
-                pad_token_id=self.processor.tokenizer.pad_token_id
-            )
+            outputs = self.model.generate(**inputs, **gen_kwargs)
 
         # Decode only new tokens
         response_ids = outputs[0][len(inputs['input_ids'][0]):]
@@ -271,6 +398,17 @@ Be specific and detailed. Focus on visual, verifiable characteristics."""
 
             data = json.loads(json_match.group())
 
+            # Check if essential fields are present
+            essential_fields = ['visual_features', 'cultural_elements', 'key_characteristics']
+            missing_fields = [f for f in essential_fields if not data.get(f)]
+
+            if missing_fields:
+                logger.warning(f"Missing essential fields for {item_id}: {missing_fields}")
+                # Don't return None - create partial knowledge
+                extraction_notes = f"Partial extraction - missing: {', '.join(missing_fields)}"
+            else:
+                extraction_notes = ''
+
             knowledge = CulturalKnowledge(
                 item_id=item_id,
                 category=category,
@@ -285,7 +423,7 @@ Be specific and detailed. Focus on visual, verifiable characteristics."""
                 common_mistakes=data.get('common_mistakes', ''),
                 quality_score=quality_score,
                 confidence=data.get('confidence', 'medium'),
-                extraction_notes=''
+                extraction_notes=extraction_notes
             )
 
             return knowledge
@@ -364,13 +502,13 @@ def main():
         "--data-dir",
         type=Path,
         required=True,
-        help="Path to country pack directory (e.g., ~/ccub2-agent-data/country_packs/korea)"
+        help="Path to country pack directory (e.g., PROJECT_ROOT/data/country_packs/korea)"
     )
     parser.add_argument(
         "--output",
         type=Path,
         required=True,
-        help="Output JSON file for extracted knowledge (e.g., ~/ccub2-agent-data/cultural_knowledge/korea_knowledge.json)"
+        help="Output JSON file for extracted knowledge (e.g., PROJECT_ROOT/data/cultural_knowledge/korea_knowledge.json)"
     )
     parser.add_argument(
         "--model-name",

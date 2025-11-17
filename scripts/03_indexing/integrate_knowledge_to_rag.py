@@ -243,6 +243,7 @@ def save_index(index, metadata: List[Dict], output_dir: Path):
         "index_type": "faiss.IndexFlatIP",
         "dimension": index.d,
         "total_vectors": index.ntotal,
+        "model_name": "sentence-transformers/all-MiniLM-L6-v2",
         "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
         "sources": list(set(m['source'] for m in metadata)),
         "last_updated": str(Path(__file__).stat().st_mtime)
@@ -263,13 +264,13 @@ def main():
         "--knowledge-file",
         type=Path,
         required=True,
-        help="Path to extracted knowledge JSON (e.g., ~/ccub2-agent-data/cultural_knowledge/korea_knowledge.json)"
+        help="Path to extracted knowledge JSON (e.g., PROJECT_ROOT/data/cultural_knowledge/korea_knowledge.json)"
     )
     parser.add_argument(
         "--index-dir",
         type=Path,
         required=True,
-        help="Path to FAISS index directory (e.g., ~/ccub2-agent-data/cultural_index/korea)"
+        help="Path to FAISS index directory (e.g., PROJECT_ROOT/data/cultural_index/korea)"
     )
     parser.add_argument(
         "--embedding-model",

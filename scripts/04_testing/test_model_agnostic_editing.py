@@ -91,10 +91,14 @@ def test_full_workflow(
     logger.info(f"✓ {model_type} adapter ready")
     logger.info("")
 
-    # Generate initial image
+    # Generate initial image with REALISTIC prompt
     logger.info("2. Generating initial image...")
+
+    # IMPORTANT: Add photorealistic keywords for better quality
+    realistic_prompt = f"photorealistic professional photograph, {prompt}, realistic skin texture, detailed fabric, natural lighting, 8k uhd, high quality"
+
     try:
-        initial_image = adapter.generate(prompt=prompt, width=1024, height=1024, seed=42)
+        initial_image = adapter.generate(prompt=realistic_prompt, width=1024, height=1024, seed=42)
 
         # Save initial image
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -283,14 +287,21 @@ def test_full_workflow(
         logger.info("✓ Adapter reloaded")
         logger.info("")
 
-        # Edit image
-        logger.info(f"7. Editing image with reference (iteration {iteration})...")
+        # Edit image with RAG-based cultural guidance
+        logger.info(f"7. Editing image with RAG cultural guidance (iteration {iteration})...")
+
+        # Extract metadata for dynamic cultural context
+        reference_metadata = reference.get('metadata') if reference else None
+        if reference_metadata:
+            logger.info(f"   Using RAG metadata with description: {reference_metadata.get('description_enhanced', 'N/A')[:80]}...")
+
         try:
             edited_image = adapter.edit(
                 image=current_image,
                 instruction=instruction,
                 reference_image=Path(reference['image_path']) if reference else None,
-                strength=0.8,
+                reference_metadata=reference_metadata,  # ← PASS RAG METADATA!
+                strength=0.95,  # High strength for aggressive editing
                 seed=42,
             )
 
@@ -754,7 +765,7 @@ Examples:
         if not args.model:
             args.model = 'qwen'
         if not args.t2i_model:
-            args.t2i_model = 'sdxl'
+            args.t2i_model = 'sd35'
         if not args.country:
             args.country = 'korea'
         if not args.category:

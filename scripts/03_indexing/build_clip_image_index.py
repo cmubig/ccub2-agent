@@ -9,7 +9,7 @@ This script:
 4. Saves index + metadata to disk
 
 Usage:
-    python scripts/build_clip_image_index.py --country korea --images-dir ~/ccub2-agent-data/country_packs/korea/images/
+    python scripts/build_clip_image_index.py --country korea --images-dir PROJECT_ROOT/data/country_packs/korea/images/
 """
 
 import argparse
@@ -268,10 +268,16 @@ def main():
     if args.output_dir is None:
         args.output_dir = PROJECT_ROOT / "data" / "clip_index" / args.country
 
-    # Set default dataset path
+    # Set default dataset path (prioritize enhanced version)
     if args.dataset is None:
-        default_dataset = Path.home() / f"ccub2-agent-data/country_packs/{args.country}/approved_dataset.json"
-        if default_dataset.exists():
+        # Try enhanced dataset first
+        enhanced_dataset = PROJECT_ROOT / f"data/country_packs/{args.country}/approved_dataset_enhanced.json"
+        default_dataset = PROJECT_ROOT / f"data/country_packs/{args.country}/approved_dataset.json"
+
+        if enhanced_dataset.exists():
+            args.dataset = enhanced_dataset
+            logger.info(f"Using enhanced dataset: {args.dataset}")
+        elif default_dataset.exists():
             args.dataset = default_dataset
             logger.info(f"Using default dataset: {args.dataset}")
 

@@ -39,17 +39,19 @@ def main():
     parser.add_argument(
         '--output-dir',
         type=Path,
-        help='Output directory for images (default: ~/ccub2-agent-data/country_packs/{country}/images)'
+        help='Output directory for images (default: PROJECT_ROOT/data/country_packs/{country}/images)'
     )
     parser.add_argument(
         '--dataset',
         type=Path,
-        help='Dataset JSON path (default: ~/ccub2-agent-data/country_packs/{country}/approved_dataset.json)'
+        help='Dataset JSON path (default: PROJECT_ROOT/data/country_packs/{country}/approved_dataset.json)'
     )
     args = parser.parse_args()
 
     # Set default paths
-    base_dir = Path.home() / f"ccub2-agent-data/country_packs/{args.country}"
+    import sys
+    PROJECT_ROOT = Path(__file__).parent.parent.parent
+    base_dir = PROJECT_ROOT / f"data/country_packs/{args.country}"
     dataset_path = args.dataset or (base_dir / "approved_dataset.json")
     images_dir = args.output_dir or (base_dir / "images")
 
