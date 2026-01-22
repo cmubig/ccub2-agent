@@ -118,107 +118,137 @@ class UniversalPromptAdapter:
 
     def _adapt_flux(self, instruction: str, context: Optional[EditingContext]) -> str:
         """
-        FLUX Kontext format: [Action] + [Preservation] + [Details]
+        FLUX.2 format: DETAILED, SPECIFIC
 
-        FLUX excels at context preservation and character consistency.
-        Key: Explicit preservation statements are CRITICAL.
+        FLUX.2 supports up to 32K tokens. Use VLM ACTION instructions.
+        Priority: VLM ACTION instructions > Knowledge base > Generic instructions
         """
-        # Extract cultural changes
-        cultural_mods = self._extract_cultural_modifications(instruction, context)
-
-        # FLUX formula: Simple action + Explicit preservation
         prompt_parts = []
 
-        # 1. Main action (brief and clear)
-        if cultural_mods:
-            action = f"Modify the {context.category if context else 'clothing'}: {cultural_mods}"
+        # 1. Main action (short)
+        if context:
+            prompt_parts.append(f"Edit this {context.country} {context.category} image:")
         else:
-            action = instruction.split('.')[0]  # First sentence
+            prompt_parts.append("Edit this image:")
 
-        prompt_parts.append(action)
+        # 2. VLM ANALYSIS - PRIORITY #1: Extract ACTION instructions from Problem-Action pairs
+        vlm_action_found = False
+        if context and context.detected_issues:
+            for issue in context.detected_issues:
+                desc = issue.get('description', '')
 
-        # 2. Preservation (FLUX CRITICAL!)
+                # Skip score-based generic descriptions
+                if 'needs improvement' in desc and '/10)' in desc:
+                    continue
+
+                # NEW: Extract ACTION lines from VLM Problem-Action pairs
+                actions = self._extract_actions_from_vlm(desc)
+                if actions:
+                    for action in actions[:2]:  # Top 2 actions
+                        prompt_parts.append(action)
+                    vlm_action_found = True
+                    break
+
+                # Fallback: Use long specific descriptions directly if no ACTION format
+                elif len(desc) > 50 and not self._is_empty_instruction(desc):
+                    if not any(desc.startswith(verb) for verb in ['Replace', 'Add', 'Remove', 'Change', 'Transform']):
+                        desc = f"Fix: {desc}"
+                    prompt_parts.append(desc)
+                    vlm_action_found = True
+                    break
+
+        # 3. KNOWLEDGE BASE - PRIORITY #2
+        if context and context.cultural_elements and not vlm_action_found:
+            cultural_text = context.cultural_elements.strip()
+            if len(cultural_text) > 50:
+                prompt_parts.append(f"Apply authentic {context.country} style: {cultural_text}")
+
+        # 4. Fallback
+        if not vlm_action_found and (not context or not context.cultural_elements):
+            prompt_parts.append(instruction)
+
+        # 5. Preservation - Category-aware
         if context and context.preserve_identity:
-            preservation = (
-                "while maintaining the exact same person, face, facial features, "
-                "pose, body proportions, background, and overall composition"
-            )
-            prompt_parts.append(preservation)
+            people_categories = {'fashion', 'clothing', 'event', 'wedding', 'people', 'portrait'}
+            category_lower = (context.category or '').lower()
 
-        # 3. Cultural specifics (FLUX has 512 token limit)
-        if context and context.cultural_elements:
-            key_terms = self._extract_keywords(context.cultural_elements, max_words=30)
-            if key_terms:
-                prompt_parts.append(f"Ensure authentic {context.country} style: {key_terms}")
+            if any(cat in category_lower for cat in people_categories):
+                prompt_parts.append("KEEP: same person, face, pose, background.")
+            else:
+                prompt_parts.append("KEEP: same composition, layout, structure. Do NOT add/remove subjects.")
 
         final_prompt = " ".join(prompt_parts)
-
-        # Enforce token limit
-        if len(final_prompt.split()) > 512:
-            final_prompt = " ".join(final_prompt.split()[:512])
-            logger.warning("FLUX prompt truncated to 512 tokens")
-
-        logger.debug(f"FLUX prompt: {final_prompt}")
+        logger.info(f"FLUX prompt ({len(final_prompt)} chars, {len(final_prompt.split())} words)")
+        logger.info(f"Full prompt: {final_prompt}")
         return final_prompt
 
     def _adapt_qwen(self, instruction: str, context: Optional[EditingContext]) -> str:
         """
-        Qwen format: Simple, sequential, actionable
+        Qwen format: DETAILED, SPECIFIC, ACTIONABLE
 
-        KEY: Qwen works best with 1-2 SIMPLE fixes at a time, not long analysis.
+        Qwen-Image-Edit-2509 supports up to 32K tokens, optimal ~200 tokens (~800 chars).
+        Priority: VLM ACTION instructions > Knowledge base > Generic instructions
         """
         prompt_parts = []
 
-        # 1. Main subject and action
+        # 1. Main action (short)
         if context:
-            subject = f"the {context.category} in this {context.country} image"
+            prompt_parts.append(f"Edit this {context.country} {context.category} image:")
         else:
-            subject = "the subject"
+            prompt_parts.append("Edit this image:")
 
-        prompt_parts.append(f"Modify {subject}.")
-
-        # 2. Sequential fixes (MAX 2 simple instructions)
+        # 2. VLM ANALYSIS - PRIORITY #1: Extract ACTION instructions from Problem-Action pairs
+        vlm_action_found = False
         if context and context.detected_issues:
-            # Extract TOP 2 actionable fixes from VLM analysis
-            detailed_issues = [i for i in context.detected_issues if i.get('is_detailed')]
-            if detailed_issues:
-                desc = detailed_issues[0].get('description', '')
-                if desc:
-                    # Convert VLM analysis to simple numbered fixes
-                    simple_fixes = self._extract_simple_fixes(desc, max_fixes=2)
-                    if simple_fixes:
-                        prompt_parts.append(simple_fixes)
-                    else:
-                        # Last resort: convert first sentence to instruction
-                        # FIXED: Increased from 150 to 500 chars to avoid truncation
-                        first_issue = desc.split('\n')[0][:500]
-                        prompt_parts.append(self._to_simple_instruction(first_issue, context))
-            else:
-                # Generic issues - convert to specific fixes (limit to 1 for focused editing)
-                for issue in context.detected_issues[:1]:
-                    desc = issue.get('description', '')
-                    if desc:
-                        fix = self._issue_to_specific_fix(desc, context)
-                        prompt_parts.append(fix)
-        else:
-            # Fallback to raw instruction (simplified)
-            simple_inst = instruction.split('.')[0]  # First sentence only
-            prompt_parts.append(simple_inst)
+            for issue in context.detected_issues:
+                desc = issue.get('description', '')
 
-        # 3. Preservation (CRITICAL for Qwen)
+                # Skip score-based generic descriptions
+                if 'needs improvement' in desc and '/10)' in desc:
+                    continue
+
+                # NEW: Extract ACTION lines from VLM Problem-Action pairs
+                actions = self._extract_actions_from_vlm(desc)
+                if actions:
+                    for action in actions[:2]:  # Top 2 actions
+                        prompt_parts.append(action)
+                    vlm_action_found = True
+                    break
+
+                # Fallback: Use long specific descriptions directly if no ACTION format
+                elif len(desc) > 50 and not self._is_empty_instruction(desc):
+                    # Try to convert problem to action if it's not already actionable
+                    if not any(desc.startswith(verb) for verb in ['Replace', 'Add', 'Remove', 'Change', 'Transform']):
+                        desc = f"Fix: {desc}"
+                    prompt_parts.append(desc)
+                    vlm_action_found = True
+                    break
+
+        # 3. KNOWLEDGE BASE - PRIORITY #2 (if VLM didn't give specifics)
+        if context and context.cultural_elements and not vlm_action_found:
+            cultural_text = context.cultural_elements.strip()
+            if len(cultural_text) > 50:
+                prompt_parts.append(f"Apply authentic {context.country} style: {cultural_text}")
+
+        # 4. Fallback to original instruction if nothing specific
+        if not vlm_action_found and (not context or not context.cultural_elements):
+            prompt_parts.append(instruction)
+
+        # 5. Preservation - Category-aware (keep short)
         if context and context.preserve_identity:
-            preservation = (
-                "Retain the original: facial identity, skin tone, eye color, "
-                "hair style, body type, pose, hand positions, background environment, "
-                "and lighting setup. Only modify the specified cultural elements."
-            )
-            prompt_parts.append(preservation)
+            people_categories = {'fashion', 'clothing', 'event', 'wedding', 'people', 'portrait'}
+            category_lower = (context.category or '').lower()
 
-        # 4. Quality directive
-        prompt_parts.append("Maintain high detail, realistic textures, and cultural authenticity.")
+            if any(cat in category_lower for cat in people_categories):
+                prompt_parts.append("KEEP: same person, face, pose, background.")
+            else:
+                prompt_parts.append("KEEP: same composition, layout, structure. Do NOT add/remove subjects.")
 
         final_prompt = " ".join(prompt_parts)
-        logger.debug(f"Qwen prompt ({len(final_prompt)} chars): {final_prompt[:200]}...")
+
+        # Log full prompt for debugging
+        logger.info(f"Qwen prompt ({len(final_prompt)} chars, {len(final_prompt.split())} words)")
+        logger.info(f"Full prompt: {final_prompt}")
         return final_prompt
 
     def _adapt_sd35(self, instruction: str, context: Optional[EditingContext]) -> str:
@@ -316,6 +346,45 @@ class UniversalPromptAdapter:
 
     # Helper methods
 
+    def _extract_actions_from_vlm(self, vlm_description: str) -> List[str]:
+        """
+        Extract ACTION instructions from VLM's Problem-Action pairs.
+
+        VLM generates output like:
+        PROBLEM: The collar is wrong
+        ACTION: Replace the collar with traditional "dongjeong" collar
+
+        PROBLEM: Western plating style
+        ACTION: Add traditional side dishes "banchan"
+
+        We extract ONLY the ACTION lines.
+        """
+        import re
+
+        actions = []
+
+        # Pattern 1: "ACTION: ..." lines
+        action_matches = re.findall(r'ACTION:\s*(.+?)(?=\n|PROBLEM:|$)', vlm_description, re.IGNORECASE | re.DOTALL)
+        for match in action_matches:
+            action = match.strip()
+            if len(action) > 20:  # Skip too short actions
+                # Clean up the action
+                action = action.split('\n')[0].strip()  # Take only first line
+                actions.append(action)
+
+        # Pattern 2: Lines starting with action verbs (fallback)
+        if not actions:
+            action_verbs = ['Replace', 'Add', 'Remove', 'Change', 'Transform', 'Use']
+            lines = vlm_description.split('\n')
+            for line in lines:
+                line = line.strip()
+                # Remove leading "- " or "1. " etc
+                line = re.sub(r'^[\-\d\.\*]+\s*', '', line)
+                if any(line.startswith(verb) for verb in action_verbs) and len(line) > 20:
+                    actions.append(line)
+
+        return actions[:3]  # Max 3 actions
+
     def _extract_cultural_modifications(self, instruction: str, context: Optional[EditingContext]) -> str:
         """
         Extract what needs to be culturally modified.
@@ -350,6 +419,16 @@ class UniversalPromptAdapter:
         # If description is already specific and long, use it directly
         if len(issue_desc) > 80 and not issue_lower.endswith("?"):
             return issue_desc
+
+        # HANDLE GENERIC SCORE-BASED DESCRIPTIONS like "Cultural accuracy needs improvement (3/10)"
+        if "needs improvement" in issue_lower and "/10)" in issue_lower:
+            # This is a generic VLM score, need to generate specific instructions from RAG context
+            if context.cultural_elements and len(context.cultural_elements) > 50:
+                # Extract specific cultural guidance from RAG context
+                return self._generate_specific_fix_from_context(context)
+            else:
+                # No RAG context available, use category-based generic fix
+                return self._generate_category_based_fix(context)
 
         # Handle generic question-style descriptions using RAG context
         if "incorrect or missing" in issue_lower or "wrong" in issue_lower:
@@ -391,6 +470,82 @@ class UniversalPromptAdapter:
             fix = f"Fix: {fix}"
 
         return fix
+
+    def _generate_specific_fix_from_context(self, context: EditingContext) -> str:
+        """Generate specific fix instructions using RAG cultural context."""
+        if not context.cultural_elements:
+            return self._generate_category_based_fix(context)
+
+        # Parse cultural context to extract actionable items
+        context_text = context.cultural_elements
+        fix_parts = []
+
+        # Extract key information from context
+        lines = context_text.split('\n')
+        for line in lines[:5]:  # Use top 5 lines of context
+            line = line.strip()
+            if len(line) > 20 and not line.startswith('['):
+                # Convert informational text to actionable instruction
+                if any(keyword in line.lower() for keyword in ['should', 'must', 'traditional', 'authentic', 'typical']):
+                    fix_parts.append(line[:200])
+                    break
+
+        if fix_parts:
+            return f"Apply authentic {context.country} {context.category} style: {fix_parts[0]}"
+        else:
+            return self._generate_category_based_fix(context)
+
+    def _generate_category_based_fix(self, context: EditingContext) -> str:
+        """Generate category-specific fix when no RAG context available."""
+        category = context.category.lower() if context.category else "general"
+        country = context.country
+
+        category_fixes = {
+            "food": f"Transform to authentic {country} cuisine with traditional ingredients, plating style, and serving presentation",
+            "traditional_clothing": f"Replace with authentic {country} traditional garments including proper fabric, colors, and structural elements",
+            "architecture": f"Modify architectural elements to reflect authentic {country} building style, materials, and decorative features",
+            "art": f"Apply traditional {country} artistic style, techniques, and cultural motifs",
+            "festival": f"Add authentic {country} festival elements, decorations, and cultural symbols",
+            "wedding": f"Transform to traditional {country} wedding style with appropriate attire and ceremonial elements",
+            "funeral": f"Apply traditional {country} funeral/memorial customs and appropriate styling",
+            "wildlife": f"Ensure accurate representation of {country}'s native species and natural habitat",
+            "landmark": f"Modify to accurately represent {country}'s iconic landmarks and architectural heritage",
+        }
+
+        # Find matching category
+        for key, fix in category_fixes.items():
+            if key in category:
+                return fix
+
+        # Default fallback
+        return f"Transform to authentic {country} {category} style with culturally accurate elements and traditional characteristics"
+
+    def _is_empty_instruction(self, text: str) -> bool:
+        """
+        Check if the instruction is essentially empty or says "no issues".
+
+        These patterns confuse I2I models and cause image degradation.
+        """
+        if not text:
+            return True
+
+        lower_text = text.lower()
+        empty_patterns = [
+            "no specific incorrect",
+            "no incorrect elements",
+            "there are no",
+            "nothing to fix",
+            "no issues",
+            "no problems",
+            "looks correct",
+            "appears correct",
+            "is correct",
+            "are correct",
+            "no changes needed",
+            "no modifications needed",
+        ]
+
+        return any(pattern in lower_text for pattern in empty_patterns)
 
     def _extract_key_cultural_elements(self, cultural_text: str, category: str) -> List[str]:
         """Extract specific cultural elements from RAG context."""
@@ -601,11 +756,73 @@ class UniversalPromptAdapter:
         return text[:100].strip()
 
     def _extract_keywords(self, text: str, max_words: int = 20) -> str:
-        """Extract key terms from cultural context."""
-        words = text.split()
-        if len(words) <= max_words:
+        """
+        Extract key terms from cultural context.
+
+        CHANGED: Prioritize culturally significant terms, remove filler words.
+        This gives I2I models SPECIFIC guidance instead of generic terms.
+        """
+        # If text is short enough, return as-is
+        if len(text.split()) <= max_words:
             return text
-        return " ".join(words[:max_words]) + "..."
+
+        # Remove common filler phrases that don't help I2I models
+        cleaned = text
+        filler_phrases = [
+            "it is important to note that",
+            "it should be noted that",
+            "generally speaking",
+            "in most cases",
+            "typically",
+            "usually",
+            "often",
+            "sometimes",
+            "however",
+            "therefore",
+            "furthermore",
+            "additionally",
+            "for example",
+        ]
+        for phrase in filler_phrases:
+            cleaned = cleaned.replace(phrase, "")
+
+        # Split into sentences and prioritize
+        sentences = [s.strip() for s in cleaned.split('.') if s.strip()]
+
+        # Collect words, prioritizing:
+        # 1. First sentence (most important context)
+        # 2. Sentences with specific cultural terms (capitalized words)
+        # 3. Sentences with concrete nouns
+
+        priority_sentences = []
+
+        # First sentence is always high priority
+        if sentences:
+            priority_sentences.append(sentences[0])
+
+        # Add sentences with capitalized words (proper nouns - cultural terms)
+        for sent in sentences[1:]:
+            words = sent.split()
+            # Check for capitalized words (excluding first word)
+            if any(w[0].isupper() for w in words[1:] if w):
+                priority_sentences.append(sent)
+                if len(' '.join(priority_sentences).split()) >= max_words:
+                    break
+
+        # Join priority sentences
+        result = '. '.join(priority_sentences)
+
+        # If still too long, truncate to max_words
+        words = result.split()
+        if len(words) > max_words:
+            result = ' '.join(words[:max_words])
+            # Try to end at sentence boundary
+            if '.' in result:
+                last_period = result.rfind('.')
+                if last_period > len(result) * 0.7:  # At least 70% of text
+                    result = result[:last_period + 1]
+
+        return result.strip()
 
 
 # Singleton instance

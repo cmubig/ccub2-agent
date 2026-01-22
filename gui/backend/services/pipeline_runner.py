@@ -191,12 +191,13 @@ class PipelineRunner:
                 logger.error(f"Error in GPU monitoring loop: {e}")
                 await asyncio.sleep(5)  # Wait longer on error
 
-    async def start(self, config: PipelineConfig) -> str:
+    async def start(self, config: PipelineConfig, image_path: Optional[str] = None) -> str:
         """
         Start pipeline execution
 
         Args:
             config: Pipeline configuration
+            image_path: Optional path to an initial image
 
         Returns:
             pipeline_id: Unique identifier for this pipeline run
@@ -214,6 +215,13 @@ class PipelineRunner:
             start_time=time.time(),
             current_iteration=0
         )
+        
+        # Set initial image if provided
+        if image_path:
+            self.current_image_path = Path(image_path)
+            logger.info(f"Using initial image from: {image_path}")
+        else:
+            self.current_image_path = None
 
         # Initialize history
         self.history = PipelineHistory(
@@ -256,7 +264,15 @@ class PipelineRunner:
             await self._execute_input_node(config)
 
             # Step 2: T2I Generation
-            await self._execute_t2i_generator(config)
+            if self.current_image_path:
+                logger.info("Initial image provided, skipping T2I generation.")
+                # Mark T2I node as skipped
+                t2i_node = self.nodes["t2i_generator"]
+                t2i_node.status = NodeStatus.COMPLETED # Mark as completed to not break the flow
+                t2i_node.data = {"status": "skipped", "reason": "Initial image provided"}
+                await manager.broadcast_node_update("t2i_generator", "completed", t2i_node.data)
+            else:
+                await self._execute_t2i_generator(config)
 
             # Iteration loop
             for iteration in range(config.max_iterations):
@@ -404,15 +420,37 @@ class PipelineRunner:
         node = self.nodes["input"]
         node.status = NodeStatus.PROCESSING
         node.start_time = time.time()
+        
+        input_data = {
+            "prompt": config.prompt,
+            "country": config.country,
+            "category": config.category,
+        }
+
+        if self.current_image_path:
+            # Copy the temp image to the session directory
+            session_dir = get_session_dir(self.pipeline_id)
+            new_image_path = session_dir / "step_0_initial.png"
+            
+            # Ensure the original file exists before copying
+            if self.current_image_path.exists():
+                with open(self.current_image_path, "rb") as src, open(new_image_path, "wb") as dst:
+                    dst.write(src.read())
+                
+                # Update current_image_path to point to the new location
+                self.current_image_path = new_image_path
+                
+                input_data["image_path"] = str(self.current_image_path)
+                input_data["image_base64"] = self._image_to_base64(self.current_image_path)
+                logger.info(f"Copied initial image to session directory: {self.current_image_path}")
+            else:
+                logger.error(f"Initial image not found at: {self.current_image_path}")
+
 
         await manager.broadcast_node_update(
             "input",
             "processing",
-            {
-                "prompt": config.prompt,
-                "country": config.country,
-                "category": config.category
-            }
+            input_data
         )
 
         # Simulate processing
@@ -420,11 +458,7 @@ class PipelineRunner:
 
         node.status = NodeStatus.COMPLETED
         node.end_time = time.time()
-        node.data = {
-            "prompt": config.prompt,
-            "country": config.country,
-            "category": config.category
-        }
+        node.data = input_data
 
         await manager.broadcast_node_update("input", "completed", node.data)
 
@@ -970,21 +1004,33 @@ class PipelineRunner:
                     issues = all_issues
                     logger.warning(f"No remaining/new issues detected, using all {len(issues)} issues as fallback")
 
-            # SEQUENTIAL ISSUE FIXING: Select ONLY top 1 issue by severity for focused improvement
+            # SEQUENTIAL ISSUE FIXING: Select different issue each iteration
+            # Use iteration number as index to cycle through issues
             if len(issues) > 1:
                 sorted_issues = sorted(
                     issues,
                     key=lambda x: x.get('severity', 5) if isinstance(x, dict) else 5,
                     reverse=True
                 )
-                selected_issue = sorted_issues[0]
+                # Pick issue based on iteration number (cycle through issues)
+                issue_index = iteration % len(sorted_issues)
+                selected_issue = sorted_issues[issue_index]
                 severity = selected_issue.get('severity', 5) if isinstance(selected_issue, dict) else 5
                 issues = [selected_issue]
-                logger.info(f"Sequential fix: Focusing on TOP 1 issue (severity {severity}) for better results")
+                logger.info(f"Sequential fix: Iteration {iteration} selecting issue #{issue_index + 1}/{len(sorted_issues)} (severity {severity})")
             elif len(issues) == 1:
                 logger.info(f"Iteration {iteration}: Addressing 1 remaining issue")
             else:
-                logger.info(f"Iteration {iteration}: No issues to address")
+                logger.info(f"Iteration {iteration}: No issues to address - SKIPPING I2I editing")
+                # No issues = nothing to fix, skip this iteration to prevent degradation
+                node.status = NodeStatus.COMPLETED
+                node.data = {
+                    "adapted_prompt": "No issues to fix - skipped",
+                    "skipped": True,
+                    "reason": "VLM detected no remaining issues"
+                }
+                await manager.broadcast_node_update("prompt_adapter", "completed", node.data)
+                return  # Skip I2I editing entirely
 
             # Extract cultural elements from reference data or CLIP metadata
             cultural_elements = ref_data.get("reason", "")
@@ -1122,7 +1168,7 @@ class PipelineRunner:
 
             # Get reference (optional)
             ref_data = self.nodes["reference_selector"].data
-            reference_path = ref_data.get("reference_path")
+            reference_path = ref_data.get("selected_path")  # Fixed: was "reference_path", should be "selected_path"
 
             # If Reference Selector failed, fallback to CLIP RAG Search results
             reference_paths = []
@@ -1131,9 +1177,21 @@ class PipelineRunner:
                 clip_data = self.nodes.get("clip_rag_search", {}).data
                 search_results = clip_data.get("search_results", [])
                 if search_results:
-                    # Use top-3 results from CLIP RAG
-                    reference_paths = [result["path"] for result in search_results[:3] if result.get("path")]
-                    logger.info(f"Using {len(reference_paths)} reference images from CLIP RAG (similarities: {[f'{r['score']:.1%}' for r in search_results[:3]]})")
+                    # Filter out self-references to prevent the model from copying the current image
+                    current_image_name = Path(current_image).name
+                    filtered_results = [
+                        result for result in search_results
+                        if Path(result.get("path", "")).name != current_image_name
+                    ]
+
+                    if filtered_results:
+                        # Use top-3 results from filtered CLIP RAG results
+                        reference_paths = [result["path"] for result in filtered_results[:3] if result.get("path")]
+                        similarities = [f"{r['score']:.1%}" for r in filtered_results[:3]]
+                        logger.info(f"Using {len(reference_paths)} reference images from CLIP RAG (filtered self-reference, similarities: {similarities})")
+                    else:
+                        logger.warning("All CLIP results were self-references, proceeding without reference image")
+                        reference_paths = []
             else:
                 reference_paths = [reference_path]
 
@@ -1172,9 +1230,15 @@ class PipelineRunner:
 
                 # Load reference images (single or multiple)
                 ref_imgs = []
+                current_image_name = Path(current_image).name
                 for ref_path in reference_paths:
                     if ref_path and Path(ref_path).exists():
+                        # Warn if reference is the same as current image (should not happen after filtering)
+                        if Path(ref_path).name == current_image_name:
+                            logger.warning(f"⚠️  Reference image is same as current image: {ref_path}")
+                            logger.warning(f"   This may cause the model to copy the reference instead of editing!")
                         ref_imgs.append(Image.open(ref_path))
+                        logger.info(f"   Loaded reference: {Path(ref_path).name}")
 
                 # Use first reference for single-reference models, or pass all for multi-reference support
                 ref_img = ref_imgs[0] if ref_imgs else None
@@ -1195,20 +1259,22 @@ class PipelineRunner:
                     # Fallback to Reference Selector metadata
                     ref_metadata = ref_data
 
-                # Adaptive CFG scale: Higher when using reference to prevent copying
-                # Reference image mode: CFG 12.0-15.0 to prioritize instruction over reference
-                # No reference mode: CFG 7.0 for balanced editing
-                cfg_scale = 14.0 if ref_img else 7.0
+                # Let adapter decide CFG scale based on model type
+                # Qwen: Uses text-based reference (CFG 7.0)
+                # FLUX/SDXL ControlNet: Uses Canny edge (model-specific CFG)
+                # SD3.5: Uses strength parameter (CFG 7.0)
 
-                # Edit with stronger parameters for visible changes
+                # Edit with model-specific parameters
+                # Fixed seed for consistent editing behavior
+                # Lower strength (0.35) for better original preservation
                 return i2i_adapter.edit(
                     image=current_img,
                     instruction=editing_prompt,
                     reference_image=ref_img,
                     reference_metadata=ref_metadata,
-                    strength=0.9,  # Increased from 0.7 for stronger edits (note: not used by Qwen)
-                    true_cfg_scale=cfg_scale,  # Adaptive: 14.0 with reference, 7.0 without
-                    num_inference_steps=50,  # Increased from 40 for better quality
+                    strength=0.35,  # Further reduced for better preservation (was 0.5)
+                    num_inference_steps=40,  # Reduced steps (was 50) - fewer steps = less deviation
+                    seed=42,  # Fixed seed
                     progress_callback=progress_callback,
                 )
 

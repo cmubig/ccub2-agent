@@ -18,8 +18,12 @@ export const pipelineAPI = {
   /**
    * Start pipeline execution
    */
-  start: async (config: PipelineConfig) => {
-    const response = await api.post('/api/pipeline/start', { config })
+  start: async (formData: FormData) => {
+    const response = await api.post('/api/pipeline/start', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    })
     return response.data
   },
 

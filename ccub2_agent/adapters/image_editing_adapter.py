@@ -128,10 +128,10 @@ class QwenImageEditor(BaseImageEditor):
             torch_dtype=dtype,
         )
 
-        # Enable SEQUENTIAL CPU offload for maximum memory efficiency
+        # Use CPU offload to save GPU memory (needed when VLM is also loaded)
         if self.device == "cuda":
-            logger.info("Enabling SEQUENTIAL CPU offload for maximum memory efficiency...")
             self.pipe.enable_sequential_cpu_offload()
+            logger.info("✓ Qwen model loaded with sequential CPU offload")
         else:
             self.pipe = self.pipe.to(self.device)
 
@@ -148,27 +148,25 @@ class QwenImageEditor(BaseImageEditor):
         **kwargs
     ) -> Image.Image:
         """
-        Edit image with Qwen using RAG-based cultural guidance.
+        Edit image with Qwen using TEXT-ONLY cultural guidance.
+
+        IMPORTANT: Reference images are NOT passed to the model to preserve original composition.
+        Only text metadata (descriptions, key_features) from RAG is used for cultural guidance.
 
         Args:
             image: Input image to edit
             instruction: Editing instruction
-            reference_image: Reference image path (optional, for logging)
-            reference_metadata: RAG metadata with cultural knowledge
+            reference_image: Reference image path (used for metadata lookup only, NOT passed to model)
+            reference_metadata: RAG metadata with cultural knowledge (descriptions, key_features)
             strength: Editing strength (not directly used by Qwen pipeline)
             progress_callback: Optional callback for progress updates (step, total_steps)
             **kwargs: Additional parameters
         """
         image = self._load_image(image)
 
-        # Load reference image if provided
-        ref_img = None
-        if reference_image is not None:
-            ref_img = self._load_image(reference_image)
-            logger.info(f"✓ Reference image loaded for multi-image editing")
-
-        # SMART CULTURAL CONTEXT: Extract only issue-relevant information
-        if reference_image is not None and reference_metadata is not None:
+        # TEXT-ONLY CULTURAL GUIDANCE: Use metadata descriptions, NOT the reference image
+        # This preserves original composition while adding cultural context
+        if reference_metadata is not None:
             # Extract issue keywords to filter relevant cultural info
             issue_keywords = self._extract_issue_keywords(instruction) if instruction else set()
 
@@ -189,48 +187,41 @@ class QwenImageEditor(BaseImageEditor):
             relevant_features = [
                 feat for feat in all_key_features
                 if any(keyword in feat.lower() for keyword in issue_keywords)
-            ] if issue_keywords else all_key_features[:3]  # Max 3 features
+            ] if issue_keywords else all_key_features[:5]  # Max 5 features
 
-            # Build focused cultural context
+            # Build focused cultural context from TEXT ONLY
             if relevant_description or relevant_features:
-                reference_context = "\n\nReference (authentic cultural example):"
+                reference_context = "\n\n[CULTURAL REFERENCE - Apply these authentic elements]:"
 
                 if relevant_description:
-                    # Truncate to ~200 chars for focus
-                    truncated_desc = relevant_description[:200] + "..." if len(relevant_description) > 200 else relevant_description
+                    # Use more description for better guidance (up to 300 chars)
+                    truncated_desc = relevant_description[:300] + "..." if len(relevant_description) > 300 else relevant_description
                     reference_context += f"\n{truncated_desc}"
 
                 if relevant_features:
-                    features_str = ', '.join(relevant_features[:3])  # Max 3
-                    reference_context += f"\nKey features: {features_str}"
+                    features_str = ', '.join(relevant_features[:5])  # Max 5
+                    reference_context += f"\nKey authentic features: {features_str}"
 
                 instruction = instruction + reference_context
-                logger.info(f"✓ Added focused cultural guidance ({len(relevant_features)} features)")
+                logger.info(f"✓ Added TEXT-ONLY cultural guidance ({len(relevant_features)} features, {len(relevant_description)} chars)")
                 if issue_keywords:
                     logger.debug(f"Issue keywords: {list(issue_keywords)[:5]}")
             else:
                 logger.warning("⚠ No relevant cultural information found in metadata")
+
+            if reference_image is not None:
+                logger.info(f"ℹ Reference image path provided but NOT passed to model (text-only mode)")
         elif reference_image is not None:
-            logger.warning("⚠ Reference image provided but no metadata - cultural guidance limited")
+            logger.warning("⚠ Reference image provided but no metadata - skipping (text-only mode requires metadata)")
 
-        # MULTI-IMAGE EDITING: Use reference image if provided
-        # To prevent copying reference, we use high CFG scale to prioritize instruction
-        if ref_img is not None:
-            # Add strong preservation instruction to prevent reference copying
-            preservation_note = "\n\nIMPORTANT: Preserve the ORIGINAL image's main subject, composition, pose, background, and layout. The reference image is ONLY for cultural accuracy guidance - do not copy its content or composition."
-            instruction = instruction + preservation_note
-
-            # Pass as list: [image_to_edit, reference_image]
-            image_input = [image, ref_img]
-            logger.info(f"✓ Using multi-image editing with preservation instruction")
-        else:
-            # Single image mode
-            image_input = image
+        # SINGLE IMAGE MODE ONLY: Preserve original composition
+        image_input = image
 
         num_steps = kwargs.get('num_inference_steps', 40)
 
-        # Adaptive CFG scale: Higher when using reference to prevent copying
-        default_cfg = 12.0 if ref_img is not None else 4.0
+        # CFG scale: Moderate value for balanced editing
+        # 3.0 for subtle, composition-preserving edits
+        default_cfg = 3.0
 
         params = {
             'image': image_input,
@@ -275,6 +266,54 @@ class QwenImageEditor(BaseImageEditor):
         }
 
         return keywords
+
+    def _extract_reference_description(self, ref_img, reference_metadata: Optional[Dict] = None) -> str:
+        """
+        Extract detailed visual description from reference image metadata.
+
+        This provides text-based visual guidance instead of passing the image directly,
+        preventing the model from copying the reference.
+
+        Args:
+            ref_img: Reference PIL Image (not used, kept for consistency)
+            reference_metadata: Metadata dict with descriptions and features
+
+        Returns:
+            Detailed text description of the reference image
+        """
+        description_parts = []
+
+        if reference_metadata:
+            # Extract enhanced description (preferred)
+            enhanced_desc = reference_metadata.get('description_enhanced')
+            if enhanced_desc:
+                description_parts.append(enhanced_desc)
+            else:
+                # Fallback to regular description
+                regular_desc = reference_metadata.get('description', '')
+                if regular_desc:
+                    description_parts.append(regular_desc)
+
+            # Add key features
+            key_features = reference_metadata.get('key_features', [])
+            if key_features:
+                features_text = "Key visual elements: " + ", ".join(key_features[:5])
+                description_parts.append(features_text)
+
+            # Add category context
+            category = reference_metadata.get('category', '')
+            if category:
+                category_display = category.replace('_', ' ').title()
+                description_parts.insert(0, f"Reference type: {category_display}")
+
+        # Combine all parts
+        if description_parts:
+            full_description = "\n".join(description_parts)
+            logger.debug(f"Extracted reference description: {len(full_description)} chars")
+            return full_description
+        else:
+            logger.warning("No description found in reference metadata")
+            return ""
 
     def _filter_relevant_sentences(self, text: str, keywords: set, max_sentences: int = 2) -> str:
         if not text or not keywords:
@@ -407,10 +446,15 @@ class SDXLControlNetEditor(BaseImageEditor):
         edges = cv2.Canny(image_np, 100, 200)
         edges = Image.fromarray(edges)
 
+        logger.info(f"✓ SDXL ControlNet: Using Canny edge for structure preservation")
+
         prompt = instruction
         if reference_image is not None:
             ref_img = self._load_image(reference_image)
             prompt = f"{instruction}. Style and details similar to reference image provided."
+            logger.info(f"✓ SDXL: Reference guidance via text prompt (ControlNet scale={strength:.2f})")
+        else:
+            logger.info(f"✓ SDXL: Single image editing with Canny ControlNet (scale={strength:.2f})")
 
         params = {
             'prompt': prompt,
@@ -476,8 +520,8 @@ class FluxControlNetEditor(BaseImageEditor):
         )
 
         if self.device == "cuda":
-            self.pipe.enable_model_cpu_offload()
-            logger.info("✓ Flux ControlNet loaded with CPU offload")
+            self.pipe.enable_sequential_cpu_offload()
+            logger.info("✓ Flux ControlNet loaded with SEQUENTIAL CPU offload (memory optimized)")
         else:
             self.pipe = self.pipe.to(self.device)
             logger.info(f"✓ Flux ControlNet loaded on {self.device}")
@@ -501,9 +545,14 @@ class FluxControlNetEditor(BaseImageEditor):
         edges_rgb = cv2.cvtColor(edges, cv2.COLOR_GRAY2RGB)
         edges = Image.fromarray(edges_rgb)
 
+        logger.info(f"✓ FLUX ControlNet: Using Canny edge for structure preservation")
+
         prompt = instruction
         if reference_image is not None:
             prompt = f"{instruction}. Use style and cultural elements from reference."
+            logger.info(f"✓ FLUX: Reference guidance via text prompt (ControlNet strength={strength:.2f})")
+        else:
+            logger.info(f"✓ FLUX: Single image editing with Canny ControlNet (strength={strength:.2f})")
 
         params = {
             'prompt': prompt,
@@ -633,6 +682,9 @@ class SD35Editor(BaseImageEditor):
         if reference_image is not None:
             ref_img = self._load_image(reference_image)
             prompt = f"{instruction}. Apply cultural accuracy and styling similar to reference image."
+            logger.info(f"✓ SD3.5: Using text-based reference guidance (strength={strength:.2f})")
+        else:
+            logger.info(f"✓ SD3.5: Single image editing (strength={strength:.2f})")
 
         num_steps = kwargs.get('num_inference_steps', 28)
 
@@ -958,6 +1010,124 @@ class GeminiImageEditor(BaseImageEditor):
         raise RuntimeError("No image generated in Gemini response")
 
 
+class Flux2Editor(BaseImageEditor):
+    """FLUX.2-dev adapter - Latest SOTA model for I2I editing."""
+
+    def __init__(self, model_name: str = "black-forest-labs/FLUX.2-dev", device: str = "auto", **kwargs):
+        super().__init__(model_name, device, **kwargs)
+        self._init_model()
+
+    def _init_model(self):
+        """Initialize FLUX.2 model."""
+        from diffusers import Flux2Pipeline
+
+        logger.info(f"Loading FLUX.2-dev: {self.model_name}")
+
+        # Use bfloat16 for efficiency
+        dtype = torch.bfloat16 if self.device == "cuda" else torch.float32
+
+        self.pipe = Flux2Pipeline.from_pretrained(
+            self.model_name,
+            torch_dtype=dtype,
+            token=True,  # Use HF token for gated model
+        )
+
+        # Enable memory optimization
+        if self.device == "cuda":
+            logger.info("Enabling CPU offload for FLUX.2...")
+            self.pipe.enable_sequential_cpu_offload()
+        else:
+            self.pipe = self.pipe.to(self.device)
+
+        logger.info(f"✓ FLUX.2-dev loaded on {self.device} with {dtype}")
+
+    def edit(
+        self,
+        image: Union[Image.Image, Path, str],
+        instruction: str,
+        reference_image: Optional[Union[Image.Image, Path, str]] = None,
+        reference_metadata: Optional[Dict[str, Any]] = None,
+        strength: float = 0.8,
+        progress_callback: Optional[callable] = None,
+        **kwargs
+    ) -> Image.Image:
+        """
+        Edit image with FLUX.2-dev using TEXT-ONLY cultural guidance.
+
+        IMPORTANT: Reference images are NOT passed to the model to preserve original composition.
+        Only text metadata from RAG is used for cultural guidance.
+        """
+        image = self._load_image(image)
+
+        # SINGLE IMAGE MODE ONLY: Preserve original composition
+        image_list = [image]
+        logger.info(f"✓ FLUX.2: Single image editing (text-only cultural guidance)")
+
+        # TEXT-ONLY cultural context from metadata
+        if reference_metadata:
+            desc = reference_metadata.get('description_enhanced') or reference_metadata.get('description', '')
+            key_features = reference_metadata.get('key_features', [])
+
+            if desc or key_features:
+                cultural_context = "\n\n[CULTURAL REFERENCE - Apply these authentic elements]:"
+                if desc:
+                    cultural_context += f"\n{desc[:300]}"
+                if key_features:
+                    cultural_context += f"\nKey features: {', '.join(key_features[:5])}"
+                instruction = instruction + cultural_context
+                logger.info(f"✓ Added TEXT-ONLY cultural guidance")
+
+        if reference_image is not None:
+            logger.info(f"ℹ Reference image path provided but NOT passed to model (text-only mode)")
+
+        num_steps = kwargs.get('num_inference_steps', 50)
+
+        params = {
+            'prompt': instruction,
+            'image': image_list,
+            'num_inference_steps': num_steps,
+            'guidance_scale': kwargs.get('guidance_scale', 4.0),
+            'generator': torch.Generator(device='cpu').manual_seed(kwargs.get('seed', 42)),
+        }
+
+        # Add progress callback if provided
+        if progress_callback is not None:
+            def diffusers_callback(pipe, step_index, timestep, callback_kwargs):
+                progress_callback(step_index + 1, num_steps)
+                return callback_kwargs
+            params['callback_on_step_end'] = diffusers_callback
+
+        with torch.inference_mode():
+            output = self.pipe(**params)
+
+        return output.images[0]
+
+    def generate(self, prompt: str, width: int = 1024, height: int = 1024, progress_callback: Optional[callable] = None, **kwargs) -> Image.Image:
+        """Generate image from prompt (T2I mode)."""
+        num_steps = kwargs.get('num_inference_steps', 50)
+
+        params = {
+            'prompt': prompt,
+            'width': width,
+            'height': height,
+            'num_inference_steps': num_steps,
+            'guidance_scale': kwargs.get('guidance_scale', 4.0),
+            'generator': torch.Generator(device='cpu').manual_seed(kwargs.get('seed', 42)),
+        }
+
+        # Add progress callback if provided
+        if progress_callback is not None:
+            def diffusers_callback(pipe, step_index, timestep, callback_kwargs):
+                progress_callback(step_index + 1, num_steps)
+                return callback_kwargs
+            params['callback_on_step_end'] = diffusers_callback
+
+        with torch.inference_mode():
+            output = self.pipe(**params)
+
+        return output.images[0]
+
+
 class ImageEditingAdapter:
     """
     Model-agnostic image editing adapter.
@@ -970,6 +1140,7 @@ class ImageEditingAdapter:
         'qwen-t2i': QwenT2IEditor,
         'sdxl': SDXLControlNetEditor,
         'flux': FluxControlNetEditor,
+        'flux2': Flux2Editor,
         'sd35': SD35Editor,
         'gemini': GeminiImageEditor,
     }
@@ -1006,7 +1177,13 @@ class ImageEditingAdapter:
         self.model_type = model_type
         self.t2i_model = t2i_model
 
-        logger.info(f"✓ ImageEditingAdapter initialized with {model_type} (T2I: {t2i_model if model_type in ['qwen', 'flux'] else 'N/A'})")
+        # Log with clear role distinction
+        if model_type in ['qwen', 'flux']:
+            logger.info(f"✓ ImageEditingAdapter initialized:")
+            logger.info(f"   - I2I Editing Model: {model_type} (for iterative improvements)")
+            logger.info(f"   - T2I Generation Model: {t2i_model} (for initial image only)")
+        else:
+            logger.info(f"✓ ImageEditingAdapter initialized: {model_type} (T2I + I2I capable)")
 
     def edit(
         self,
@@ -1024,7 +1201,7 @@ class ImageEditingAdapter:
         return self.editor.generate(prompt, width, height, **kwargs)
 
 
-def create_adapter(model_type: str = 'qwen', t2i_model: str = "sdxl", **kwargs) -> ImageEditingAdapter:
+def create_adapter(model_type: str = 'qwen', t2i_model: str = "sd35", **kwargs) -> ImageEditingAdapter:
     """
     Factory function to create image editing adapter.
 

@@ -444,30 +444,42 @@ class VLMCulturalDetector:
         context: str,
     ) -> str:
         """
-        Build a detailed analysis prompt that extracts SPECIFIC cultural issues.
+        Build a detailed analysis prompt that extracts SPECIFIC cultural issues
+        AND actionable solutions in Problem-Action pairs.
 
-        Returns a prompt that asks VLM to describe exactly what's wrong.
+        Returns a prompt that asks VLM to describe what's wrong AND what to do.
         """
         # Extract cultural elements from context
         cultural_elements = self._extract_specific_elements_from_context(context, category, country)
 
-        analysis_prompt = f"""Analyze this image of {country} {category} and identify SPECIFIC incorrect elements.
+        analysis_prompt = f"""Analyze this image of {country} {category} and provide SPECIFIC Problem-Action pairs.
 
 Expected elements for authentic {country} {category}:
 {cultural_elements}
 
-Task: List what is WRONG or MISSING in this image. Be SPECIFIC about:
-1. Which traditional elements are incorrect or missing
-2. What colors, shapes, or styles are wrong
-3. Any elements from other cultures that don't belong
+Task: For each cultural issue, provide BOTH the problem AND the concrete action to fix it.
 
-Format your answer as a clear list of specific problems. DO NOT say generic things like "cultural accuracy is low". Instead, provide specific details about:
-- Missing or incorrect traditional elements (e.g., collar styles, decorative patterns, fabric types)
-- Wrong colors, shapes, or proportions compared to authentic examples
-- Elements from other cultures that don't belong
-Be as specific as possible about what is wrong and what should be there instead.
+FORMAT (use exactly this format):
+PROBLEM: [what is wrong]
+ACTION: [specific editing instruction to fix it]
 
-SPECIFIC problems:"""
+EXAMPLES:
+PROBLEM: The collar is a Western-style folded collar instead of traditional stand-up collar
+ACTION: Replace the collar with a traditional "dongjeong" white stand-up collar
+
+PROBLEM: The dish uses Western plating style with sauce drizzle
+ACTION: Add traditional Korean side dishes "banchan", use brass chopsticks, serve in ceramic bowls
+
+PROBLEM: The roof has Western-style shingles instead of traditional tiles
+ACTION: Replace with curved Korean "giwa" roof tiles in dark gray/black color
+
+RULES:
+- Each ACTION must be a specific editing instruction (start with: Replace, Add, Remove, Change, Transform)
+- Do NOT use vague terms like "improve", "enhance", "adjust aesthetics"
+- Use SPECIFIC cultural item names in quotes (e.g., "hanbok", "kimchi", "pagoda")
+- Maximum 3 Problem-Action pairs, focus on the most important issues
+
+Now analyze this image:"""
 
         return analysis_prompt
 

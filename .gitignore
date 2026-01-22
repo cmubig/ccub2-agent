@@ -10,8 +10,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -120,3 +120,27 @@ ccub2-agent.tar.gz
 results/
 *.pyc
 __pycache__/
+
+# Node.js / Next.js
+node_modules/
+.next/
+.env.local
+.env.*.local
+next-env.d.ts
+*.tsbuildinfo
+
+# Temporary text files
+cannot_fix_*.txt
+cannot_read_*.txt
+do_not_delete_*.txt
+error_clarification.txt
+explanation_for_*.txt
+manual_fix_*.txt
+restore_*.txt
+
+# Experimental/scratch directories
+base_experimental/
+
+# Shell scripts (temporary)
+run_final_*.sh
+start_final_*.sh

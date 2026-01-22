@@ -162,6 +162,14 @@ class AgentJobCreator:
             f"subcategory={subcategory}, keywords={keywords}"
         )
 
+        # ADDED: Validate job quality before creating
+        # This prevents creating generic jobs like "Korea needs improvement"
+        if not self._validate_job_quality(category, subcategory, keywords, description):
+            logger.warning(
+                f"Job quality validation failed for {country}/{category}/{subcategory} - skipping creation"
+            )
+            return None
+
         # Check for duplicates
         if not skip_duplicate_check:
             existing_job_id = self.check_duplicate_job(country, category, subcategory, keywords)
@@ -243,6 +251,94 @@ class AgentJobCreator:
             # Dry-run mode
             import time
             return str(int(time.time()))
+
+    def _validate_job_quality(
+        self,
+        category: str,
+        subcategory: str,
+        keywords: List[str],
+        description: str
+    ) -> bool:
+        """
+        Validate job has meaningful, specific information.
+
+        Returns False if job seems too generic or low-quality.
+        This prevents creating jobs like "Korea needs improvement".
+        """
+        # Check 1: Avoid evaluation-term subcategories
+        INVALID_SUBCATEGORIES = {
+            "accuracy_improvement",
+            "needs_improvement",
+            "cultural_accuracy",
+            "prompt_alignment",
+            "general",  # Too generic
+            "alignment_needs",
+            "representation",
+        }
+        if subcategory in INVALID_SUBCATEGORIES:
+            logger.warning(f"Job quality check failed: Invalid subcategory '{subcategory}'")
+            return False
+
+        # Check 1.5: Reject subcategories containing invalid terms
+        # These are NOT meaningful for data collection
+        INVALID_SUBCATEGORY_PARTS = {
+            # Visual/aesthetic terms (too vague)
+            "aesthetics", "aesthetic", "palette", "color", "colours",
+            "fabric", "tones", "tone", "ornate", "ornament",
+            "neckline", "silhouette", "pattern", "texture",
+            "design", "element", "detail", "detailing",
+            "clothing", "clothes", "garment", "attire",
+            "collar", "sleeve", "hem", "waist",
+            # Other culture terms - we don't collect "japanese_style" for Korea!
+            "japanese", "chinese", "korean", "indian", "vietnamese", "thai",
+            "japan", "china", "korea", "india", "vietnam", "thailand",
+            "western", "european", "american",
+            "style",  # Blocks "X_style" patterns like "japanese_style"
+        }
+        subcategory_parts = set(subcategory.lower().replace("_", " ").split())
+        if subcategory_parts & INVALID_SUBCATEGORY_PARTS:
+            logger.warning(
+                f"Job quality check failed: Subcategory '{subcategory}' contains "
+                f"invalid visual/aesthetic terms: {subcategory_parts & INVALID_SUBCATEGORY_PARTS}"
+            )
+            return False
+
+        # Check 2: Require specific keywords (not just evaluation terms)
+        EVALUATION_TERMS = {
+            "accuracy", "improvement", "needs", "cultural", "quality",
+            "score", "authentic", "representation", "traditional"
+        }
+        specific_keywords = [k for k in keywords if k.lower() not in EVALUATION_TERMS]
+        if len(specific_keywords) < 2:
+            logger.warning(
+                f"Job quality check failed: Not enough specific keywords. "
+                f"Keywords: {keywords}, Specific: {specific_keywords}"
+            )
+            return False
+
+        # Check 3: Description should not contain generic scoring phrases
+        INVALID_PHRASES = [
+            "needs improvement (",
+            "/10",
+            "cultural accuracy needs",
+            "prompt alignment needs",
+            "score:",
+        ]
+        for phrase in INVALID_PHRASES:
+            if phrase in description.lower():
+                logger.warning(f"Job quality check failed: Generic phrase detected: '{phrase}'")
+                return False
+
+        # Check 4: Description should be reasonably long and specific
+        if len(description) < 100:  # Too short
+            logger.warning(
+                f"Job quality check failed: Description too short ({len(description)} chars)"
+            )
+            return False
+
+        # All checks passed
+        logger.info("✓ Job quality validation passed")
+        return True
 
     def _generate_title(self, country: str, category: str, subcategory: str = "general") -> str:
         """

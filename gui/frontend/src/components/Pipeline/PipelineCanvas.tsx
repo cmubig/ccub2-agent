@@ -256,7 +256,7 @@ export default function PipelineCanvas() {
   }, [])
 
   // Start pipeline
-  const handleStartPipeline = async (config: PipelineConfig) => {
+  const handleStartPipeline = async (config: PipelineConfig, imageFile: File | null) => {
     try {
       // Reset all nodes
       setNodes((nds) =>
@@ -269,7 +269,13 @@ export default function PipelineCanvas() {
         }))
       )
 
-      const result = await pipelineAPI.start(config)
+      const formData = new FormData();
+      formData.append('config', JSON.stringify(config));
+      if (imageFile) {
+        formData.append('image_file', imageFile);
+      }
+
+      const result = await pipelineAPI.start(formData)
       console.log('Pipeline started:', result)
       setIsPipelineRunning(true)
       setCurrentPipelineId(result.pipeline_id)

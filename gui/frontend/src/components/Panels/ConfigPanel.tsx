@@ -4,7 +4,7 @@ import React, { useState } from 'react'
 import { PipelineConfig } from '@/lib/types'
 
 interface ConfigPanelProps {
-  onStart: (config: PipelineConfig) => void
+  onStart: (config: PipelineConfig, imageFile: File | null) => void
 }
 
 export default function ConfigPanel({ onStart }: ConfigPanelProps) {
@@ -18,10 +18,17 @@ export default function ConfigPanel({ onStart }: ConfigPanelProps) {
     target_score: 8.0,
     load_in_4bit: true,
   })
+  const [imageFile, setImageFile] = useState<File | null>(null)
+
+  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      setImageFile(e.target.files[0])
+    }
+  }
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    onStart(config)
+    onStart(config, imageFile)
   }
 
   return (
@@ -45,6 +52,28 @@ export default function ConfigPanel({ onStart }: ConfigPanelProps) {
             placeholder="Enter your prompt..."
             required
           />
+        </div>
+
+        {/* Image Upload */}
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-text-secondary">Or Upload an Image</label>
+          <div className="flex items-center space-x-2">
+            <input
+              type="file"
+              onChange={handleImageChange}
+              className="block w-full text-sm text-text-tertiary file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-surface-dark file:text-text-primary hover:file:bg-surface-hover"
+              accept="image/*"
+            />
+            {imageFile && (
+              <button
+                onClick={() => setImageFile(null)}
+                className="px-2 py-1 text-xs text-text-tertiary"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          {imageFile && <p className="text-xs text-text-tertiary">Selected: {imageFile.name}</p>}
         </div>
 
         {/* Country & Category */}
@@ -86,6 +115,7 @@ export default function ConfigPanel({ onStart }: ConfigPanelProps) {
               value={config.t2i_model}
               onChange={(e) => setConfig({ ...config, t2i_model: e.target.value })}
               className="w-full px-3 py-2 bg-surface-dark border border-border-base rounded text-sm text-text-primary focus:outline-none focus:border-border-accent transition-colors"
+              disabled={!!imageFile}
             >
               <option value="sdxl">SDXL</option>
               <option value="flux">FLUX.1-dev</option>

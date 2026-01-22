@@ -4,7 +4,7 @@ import { useState } from "react";
 import type { PipelineConfig } from "@/lib/types";
 
 interface ConfigSidebarProps {
-  onStart: (config: PipelineConfig) => void;
+  onStart: (config: PipelineConfig, imageFile: File | null) => void;
   isVisible: boolean;
   onToggle: () => void;
 }
@@ -24,10 +24,17 @@ export default function ConfigSidebar({
     target_score: 8.0,
     load_in_4bit: true,
   });
+  const [imageFile, setImageFile] = useState<File | null>(null);
+
+  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      setImageFile(e.target.files[0]);
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onStart(config);
+    onStart(config, imageFile);
   };
 
   if (!isVisible) {
@@ -111,6 +118,28 @@ export default function ConfigSidebar({
             />
           </div>
 
+          {/* Image Upload */}
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-neutral-300">Or Upload an Image</label>
+            <div className="flex items-center space-x-2">
+              <input
+                type="file"
+                onChange={handleImageChange}
+                className="block w-full text-sm text-neutral-400 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-neutral-800 file:text-neutral-200 hover:file:bg-neutral-700"
+                accept="image/*"
+              />
+              {imageFile && (
+                <button
+                  onClick={() => setImageFile(null)}
+                  className="px-2 py-1 text-xs text-neutral-400 hover:text-white"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            {imageFile && <p className="text-xs text-neutral-400">Selected: {imageFile.name}</p>}
+          </div>
+
           {/* Country & Category */}
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -170,6 +199,7 @@ export default function ConfigSidebar({
                 className="w-full px-3 py-2 bg-neutral-800 border border-neutral-700 rounded text-sm text-neutral-200 focus:outline-none focus:border-neutral-500 transition-colors"
                 value={config.t2i_model}
                 onChange={(e) => setConfig({ ...config, t2i_model: e.target.value })}
+                disabled={!!imageFile}
               >
                 <option value="sd35">SD 3.5 Medium</option>
                 <option value="flux">FLUX.1-dev</option>

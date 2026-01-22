@@ -2,9 +2,12 @@
 Pipeline API Endpoints
 """
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Form, UploadFile, File
 from typing import Dict, Any
 import logging
+import json
+from pathlib import Path
+import tempfile
 
 from models.pipeline import (
     PipelineRequest,
@@ -20,8 +23,9 @@ logger = logging.getLogger(__name__)
 
 @router.post("/start", response_model=PipelineResponse)
 async def start_pipeline(
-    request: PipelineRequest,
-    background_tasks: BackgroundTasks
+    background_tasks: BackgroundTasks,
+    config: str = Form(...),
+    image_file: UploadFile = File(None)
 ):
     """
     Start the CCUB2 pipeline execution
@@ -30,13 +34,17 @@ async def start_pipeline(
     Use WebSocket at /ws/pipeline to receive real-time updates.
     """
     try:
+        # Parse config from JSON string
+        config_data = json.loads(config)
+        request = PipelineRequest(config=config_data)
+        
         # Validate configuration
-        config = request.config
+        config_obj = request.config
 
-        if not config.prompt:
+        if not config_obj.prompt:
             raise HTTPException(status_code=400, detail="Prompt is required")
 
-        if not config.country:
+        if not config_obj.country:
             raise HTTPException(status_code=400, detail="Country is required")
 
         # Check if pipeline is already running
@@ -45,9 +53,21 @@ async def start_pipeline(
                 status_code=409,
                 detail="Pipeline is already running. Please wait for it to complete."
             )
+        
+        image_path = None
+        if image_file:
+            # Save uploaded file to a temporary location
+            with tempfile.NamedTemporaryFile(delete=False, suffix=Path(image_file.filename).suffix) as tmp:
+                tmp.write(await image_file.read())
+                image_path = tmp.name
+            logger.info(f"Received image file, saved to: {image_path}")
+
+
+        # Log config for debugging
+        logger.info(f"Pipeline config: t2i_model={config_obj.t2i_model}, i2i_model={config_obj.i2i_model}")
 
         # Start pipeline in background
-        pipeline_id = await pipeline_runner.start(config)
+        pipeline_id = await pipeline_runner.start(config_obj, image_path)
         background_tasks.add_task(pipeline_runner.run)
 
         logger.info(f"Pipeline started with ID: {pipeline_id}")
