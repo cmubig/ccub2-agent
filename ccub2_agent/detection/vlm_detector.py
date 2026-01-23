@@ -1,7 +1,7 @@
 """
 VLM-based cultural problem detector.
 
-Integrates the enhanced cultural metric from metric/cultural_metric
+Integrates the enhanced cultural metric from evaluation/metrics/cultural_metric
 into the agent system for real-time problem detection.
 """
 
@@ -11,7 +11,7 @@ import logging
 import sys
 
 # Add metric module to path
-METRIC_PATH = Path(__file__).parent.parent.parent / "metric" / "cultural_metric"
+METRIC_PATH = Path(__file__).parent.parent / "evaluation" / "metrics" / "cultural_metric"
 if str(METRIC_PATH) not in sys.path:
     sys.path.insert(0, str(METRIC_PATH))
 
@@ -22,11 +22,11 @@ from enhanced_cultural_metric_pipeline import (
 )
 
 # Import CLIP image RAG
-from .clip_image_rag import create_clip_rag, CLIPImageRAG
+from ..retrieval.clip_image_rag import create_clip_rag, CLIPImageRAG
 
 # Import job creator (optional)
 try:
-    from .agent_job_creator import AgentJobCreator
+    from ..data.job_creator import AgentJobCreator
 except ImportError:
     AgentJobCreator = None
 
