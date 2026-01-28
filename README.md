@@ -178,22 +178,6 @@ python scripts/data_processing/extract_cultural_knowledge.py --load-in-4bit
 python scripts/data_processing/extract_cultural_knowledge.py --resume
 ```
 
-## Citation
-
-```bibtex
-@misc{seo2025exposingblindspotsculturalbias,
-      title={Exposing Blindspots: Cultural Bias Evaluation in Generative Image Models},
-      author={Huichan Seo and Sieun Choi and Minki Hong and Yi Zhou and Junseo Kim and Lukman Ismaila and Naome Etori and Mehul Agarwal and Zhixuan Liu and Jihie Kim and Jean Oh},
-      year={2025},
-      eprint={2510.20042},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV},
-      url={https://arxiv.org/abs/2510.20042},
-}
-```
-
-**Paper**: [Exposing Blindspots: Cultural Bias Evaluation in Generative Image Models](https://arxiv.org/abs/2510.20042)
-
 ## License
 
 MIT License - See [LICENSE](LICENSE) for details.
