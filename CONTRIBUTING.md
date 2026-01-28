@@ -55,9 +55,9 @@ CCUB2-Agent is a self-improving, model-agnostic cultural bias mitigation system 
 5. **Initialize data**
    ```bash
    python scripts/01_setup/init_dataset.py --country korea
-   python scripts/02_data_processing/enhance_captions.py --country korea
-   python scripts/03_indexing/build_clip_image_index.py --country korea
-   python scripts/03_indexing/integrate_knowledge_to_rag.py --country korea
+   python scripts/data_processing/enhance_captions.py --country korea
+   python scripts/indexing/build_clip_image_index.py --country korea
+   python scripts/indexing/integrate_knowledge_to_rag.py --country korea
    ```
 
 ### GUI Development

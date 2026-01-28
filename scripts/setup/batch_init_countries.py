@@ -68,7 +68,7 @@ def init_country(country: str, data_dir: Path, skip_images: bool = False):
     try:
         cmd = [
             sys.executable,
-            str(PROJECT_ROOT / "scripts" / "02_data_processing" / "enhance_captions.py"),
+            str(PROJECT_ROOT / "scripts" / "data_processing" / "enhance_captions.py"),
             "--dataset", str(country_pack_dir / "approved_dataset.json"),
             "--images-dir", str(country_pack_dir / "images"),
             "--output", str(country_pack_dir / "approved_dataset_enhanced.json"),
@@ -85,7 +85,7 @@ def init_country(country: str, data_dir: Path, skip_images: bool = False):
     try:
         cmd = [
             sys.executable,
-            str(PROJECT_ROOT / "scripts" / "02_data_processing" / "extract_cultural_knowledge.py"),
+            str(PROJECT_ROOT / "scripts" / "data_processing" / "extract_cultural_knowledge.py"),
             "--country", country,
             "--dataset", str(country_pack_dir / "approved_dataset_enhanced.json"),
             "--output", str(data_dir / "cultural_knowledge" / f"{country}_knowledge.json")
@@ -101,7 +101,7 @@ def init_country(country: str, data_dir: Path, skip_images: bool = False):
     try:
         cmd = [
             sys.executable,
-            str(PROJECT_ROOT / "scripts" / "03_indexing" / "build_clip_image_index.py"),
+            str(PROJECT_ROOT / "scripts" / "indexing" / "build_clip_image_index.py"),
             "--country", country,
             "--images-dir", str(country_pack_dir / "images"),
             "--dataset", str(country_pack_dir / "approved_dataset_enhanced.json"),
@@ -118,7 +118,7 @@ def init_country(country: str, data_dir: Path, skip_images: bool = False):
     try:
         cmd = [
             sys.executable,
-            str(PROJECT_ROOT / "scripts" / "03_indexing" / "integrate_knowledge_to_rag.py"),
+            str(PROJECT_ROOT / "scripts" / "indexing" / "integrate_knowledge_to_rag.py"),
             "--country", country
         ]
         subprocess.run(cmd, check=True)

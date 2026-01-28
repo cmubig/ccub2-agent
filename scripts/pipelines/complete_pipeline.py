@@ -32,7 +32,7 @@ def extract_cultural_knowledge(country: str) -> bool:
 
     cmd = [
         sys.executable,
-        str(PROJECT_ROOT / "scripts" / "02_data_processing" / "extract_cultural_knowledge.py"),
+        str(PROJECT_ROOT / "scripts" / "data_processing" / "extract_cultural_knowledge.py"),
         "--data-dir", str(country_pack_dir),
         "--output", str(output_path),
         "--resume"  # Resume from existing progress
@@ -66,7 +66,7 @@ def build_clip_index(country: str) -> bool:
 
     cmd = [
         sys.executable,
-        str(PROJECT_ROOT / "scripts" / "03_indexing" / "build_clip_image_index.py"),
+        str(PROJECT_ROOT / "scripts" / "indexing" / "build_clip_image_index.py"),
         "--country", country,
         "--images-dir", str(images_dir),
         "--dataset", str(dataset_path),
@@ -88,7 +88,7 @@ def integrate_to_rag(country: str) -> bool:
 
     cmd = [
         sys.executable,
-        str(PROJECT_ROOT / "scripts" / "03_indexing" / "integrate_knowledge_to_rag.py"),
+        str(PROJECT_ROOT / "scripts" / "indexing" / "integrate_knowledge_to_rag.py"),
         "--country", country
     ]
 

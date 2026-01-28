@@ -69,8 +69,8 @@ python scripts/04_testing/test_model_agnostic_editing.py \
 ccub2-agent/                    # Code repository
 ├── scripts/                    # Organized workflow scripts
 │   ├── 01_setup/               # Initial setup
-│   ├── 02_data_processing/     # Data enhancement
-│   ├── 03_indexing/            # Build indices
+│   ├── data_processing/     # Data enhancement
+│   ├── indexing/            # Build indices
 │   ├── 04_testing/             # Main testing interface
 │   └── 05_utils/               # Utilities
 ├── ccub2_agent/                # Core Python library

@@ -239,7 +239,7 @@ ls -la /home/chans/ccub2-agent/data/clip_index/korea/
 
 If missing, rebuild:
 ```bash
-python scripts/03_indexing/build_clip_image_index.py --country korea
+python scripts/indexing/build_clip_image_index.py --country korea
 ```
 
 ---

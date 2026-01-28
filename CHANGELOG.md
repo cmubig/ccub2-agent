@@ -103,7 +103,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 1. Update index configuration files to include `model_name` key
 2. Rebuild FAISS indices with new schema:
    ```bash
-   python scripts/03_indexing/integrate_knowledge_to_rag.py --country korea
+   python scripts/indexing/integrate_knowledge_to_rag.py --country korea
    ```
 3. Update Firebase credentials configuration
 4. Install new dependencies:

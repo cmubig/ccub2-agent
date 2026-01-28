@@ -725,8 +725,8 @@ def create_data_gap_job(country, category, missing_element, context):
 python scripts/01_setup/init_dataset.py --country korea
 
 # Re-build indices
-python scripts/03_indexing/build_clip_image_index.py --country korea
-python scripts/03_indexing/integrate_knowledge_to_rag.py --country korea
+python scripts/indexing/build_clip_image_index.py --country korea
+python scripts/indexing/integrate_knowledge_to_rag.py --country korea
 ```
 
 **Result**: New references available for next generation.

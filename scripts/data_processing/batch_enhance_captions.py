@@ -39,7 +39,7 @@ def enhance_captions_for_country(country: str) -> bool:
 
     cmd = [
         sys.executable,
-        str(PROJECT_ROOT / "scripts" / "02_data_processing" / "enhance_captions.py"),
+        str(PROJECT_ROOT / "scripts" / "data_processing" / "enhance_captions.py"),
         "--dataset", str(dataset_path),
         "--images-dir", str(images_dir),
         "--output", str(output_path),

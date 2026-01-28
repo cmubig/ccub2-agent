@@ -120,10 +120,10 @@ python scripts/01_setup/init_dataset.py --country korea
 
 ```bash
 # Build CLIP index for image similarity search
-python scripts/03_indexing/build_clip_image_index.py --country korea
+python scripts/indexing/build_clip_image_index.py --country korea
 
 # Build cultural knowledge index for text retrieval
-python scripts/03_indexing/integrate_knowledge_to_rag.py --country korea
+python scripts/indexing/integrate_knowledge_to_rag.py --country korea
 ```
 
 ⏱️ **Duration**: 5-10 minutes
@@ -304,7 +304,7 @@ Contribute authentic cultural images via the WorldCCUB app or contact the team.
 |------|---------|----------|
 | Install | `pip install -r requirements.txt` | ~5 min |
 | Init data | `python scripts/01_setup/init_dataset.py --country korea` | 10-30 min (first time) |
-| Build indices | `python scripts/03_indexing/build_clip_image_index.py --country korea` | 5-10 min |
+| Build indices | `python scripts/indexing/build_clip_image_index.py --country korea` | 5-10 min |
 | Generate | `python scripts/04_testing/test_model_agnostic_editing.py` | 2-5 min/image |
 
 **Total first-time setup**: 30-60 minutes

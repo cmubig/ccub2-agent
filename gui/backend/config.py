@@ -90,13 +90,13 @@ def get_country_config(country: str) -> dict:
     if not config["text_index"].exists():
         logger.warning(
             f"Text index not found for {country}: {config['text_index']}\n"
-            f"Run: python scripts/03_indexing/integrate_knowledge_to_rag.py --country {country}"
+            f"Run: python scripts/indexing/integrate_knowledge_to_rag.py --country {country}"
         )
 
     if not config["clip_index"].exists():
         logger.warning(
             f"CLIP index not found for {country}: {config['clip_index']}\n"
-            f"Run: python scripts/03_indexing/build_clip_image_index.py --country {country}"
+            f"Run: python scripts/indexing/build_clip_image_index.py --country {country}"
         )
 
     return config

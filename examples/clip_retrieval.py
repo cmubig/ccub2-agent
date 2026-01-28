@@ -60,7 +60,7 @@ def retrieve_similar_images(
 
     if not index_dir.exists():
         print(f"Error: CLIP index not found at {index_dir}")
-        print(f"Please run: python scripts/03_indexing/build_clip_image_index.py --country {country}")
+        print(f"Please run: python scripts/indexing/build_clip_image_index.py --country {country}")
         sys.exit(1)
 
     clip_rag = CLIPImageRAG(
@@ -145,7 +145,7 @@ def retrieve_by_text(
 
     if not index_dir.exists():
         print(f"Error: CLIP index not found at {index_dir}")
-        print(f"Please run: python scripts/03_indexing/build_clip_image_index.py --country {country}")
+        print(f"Please run: python scripts/indexing/build_clip_image_index.py --country {country}")
         sys.exit(1)
 
     clip_rag = CLIPImageRAG(

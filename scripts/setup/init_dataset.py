@@ -377,7 +377,7 @@ def run_initialization(data_dir: Path, country: str, status: dict, skip_images: 
 
         cmd = [
             sys.executable,
-            str(PROJECT_ROOT / "scripts" / "02_data_processing" / "enhance_captions.py"),
+            str(PROJECT_ROOT / "scripts" / "data_processing" / "enhance_captions.py"),
             "--dataset", str(country_pack_dir / "approved_dataset.json"),
             "--images-dir", str(country_pack_dir / "images"),
             "--output", str(country_pack_dir / "approved_dataset_enhanced.json"),
@@ -399,7 +399,7 @@ def run_initialization(data_dir: Path, country: str, status: dict, skip_images: 
 
         cmd = [
             sys.executable,
-            str(PROJECT_ROOT / "scripts" / "02_data_processing" / "extract_cultural_knowledge.py"),
+            str(PROJECT_ROOT / "scripts" / "data_processing" / "extract_cultural_knowledge.py"),
             "--data-dir", str(country_pack_dir),
             "--output", str(data_dir / "cultural_knowledge" / f"{country}_knowledge.json")
         ]
@@ -418,7 +418,7 @@ def run_initialization(data_dir: Path, country: str, status: dict, skip_images: 
 
         cmd = [
             sys.executable,
-            str(PROJECT_ROOT / "scripts" / "03_indexing" / "integrate_knowledge_to_rag.py"),
+            str(PROJECT_ROOT / "scripts" / "indexing" / "integrate_knowledge_to_rag.py"),
             "--knowledge-file", str(data_dir / "cultural_knowledge" / f"{country}_knowledge.json"),
             "--index-dir", str(data_dir / "cultural_index" / country)
         ]
@@ -437,7 +437,7 @@ def run_initialization(data_dir: Path, country: str, status: dict, skip_images: 
 
         cmd = [
             sys.executable,
-            str(PROJECT_ROOT / "scripts" / "03_indexing" / "build_clip_image_index.py"),
+            str(PROJECT_ROOT / "scripts" / "indexing" / "build_clip_image_index.py"),
             "--data-dir", str(country_pack_dir),
             "--output-dir", str(data_dir / "clip_index" / country)
         ]

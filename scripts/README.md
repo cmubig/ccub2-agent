@@ -1,224 +1,216 @@
 # Scripts Directory
 
-All scripts are organized by workflow stage for easy navigation.
+All scripts are organized by workflow stage and purpose for easy navigation.
 
 ## 📁 Directory Structure
 
 ```
 scripts/
-├── 01_setup/              # Initial setup (run once)
-├── 02_data_processing/    # Data enhancement & knowledge extraction
-├── 03_indexing/           # Building search indices
-├── 04_testing/            # Testing & evaluation
-├── 05_utils/              # Utility scripts
-└── run_complete_pipeline.sh  # Automated full pipeline
+├── setup/                    # Initial setup (one-time)
+│   ├── init_dataset.py              # ⭐ Complete initialization
+│   ├── batch_init_countries.py      # Batch initialization
+│   ├── create_country_datasets.py   # Dataset creation
+│   └── detect_available_countries.py # Country detection
+│
+├── data_processing/          # Data enhancement & knowledge extraction
+│   ├── enhance_captions.py          # Caption enhancement
+│   ├── batch_enhance_captions.py    # Batch caption enhancement
+│   └── extract_cultural_knowledge.py # Cultural knowledge extraction
+│
+├── indexing/                 # Building search indices
+│   ├── build_clip_image_index.py    # CLIP image index
+│   ├── build_country_pack_index.py  # Text RAG index
+│   └── integrate_knowledge_to_rag.py # Knowledge integration
+│
+├── testing/                  # Testing & evaluation
+│   ├── test_model_agnostic_editing.py # ⭐ Main interactive interface
+│   ├── test_vlm_detector.py          # VLM detector test
+│   └── test_single_image.py          # Single image test
+│
+├── experiments/              # Experimental scripts
+│   ├── run_ours_experiment.py        # Single experiment
+│   ├── run_ours_batch.py             # Batch experiments
+│   ├── run_ours_full_pipeline.py    # Full experimental pipeline
+│   ├── run_quick_test.py             # Quick test
+│   └── create_comparison_images.py   # Comparison grid creation
+│
+├── pipelines/                # Automated pipelines
+│   ├── complete_pipeline.py          # Single country pipeline
+│   ├── complete_pipeline_all_countries.py # All countries pipeline
+│   ├── stable_extract_all_countries.py    # Stable extraction
+│   ├── build_all_country_indices.py        # Build all indices
+│   ├── parallel_extract_knowledge.py      # Parallel extraction
+│   ├── run_complete_pipeline.sh            # Shell script
+│   ├── quick_build_all.sh                  # Quick build
+│   ├── quick_examples.sh                   # Quick examples
+│   └── BUILD_INDICES_README.md             # Index build guide
+│
+├── utils/                    # Utility scripts
+│   ├── download_images.py                 # Image downloader
+│   ├── download_country_images.py          # Country image download
+│   ├── batch_download_images.py           # Batch download
+│   ├── test_firebase_connection.py         # Firebase test
+│   ├── test_job_creation_flow.py            # Job creation test
+│   └── test_multi_country_support.py        # Multi-country test
+│
+└── analysis/                 # Analysis & inspection
+    ├── firebase_storage_analyzer.py        # Firebase Storage analysis
+    └── create_comparison_grid.py           # Comparison grid
 ```
 
 ---
 
-## 🚀 Recommended Workflow
+## 🚀 Quick Start
 
 ### For First-Time Users
 
 ```bash
-# Step 1: Initialize everything (automatic)
-python scripts/04_testing/test_model_agnostic_editing.py
+# Interactive setup (recommended)
+python scripts/testing/test_model_agnostic_editing.py
 
-# The script will detect missing data and offer to initialize.
-# It will automatically run all necessary setup steps.
+# The script will detect missing data and offer to initialize automatically.
 ```
 
 ### For Advanced Users
 
-Run scripts manually in order:
+Run scripts in order:
 
 #### 1️⃣ Setup (One-time)
 ```bash
-# Initialize complete dataset
-python scripts/01_setup/init_dataset.py --country korea
+# Initialize single country
+python scripts/setup/init_dataset.py --country korea
+
+# Initialize multiple countries
+python scripts/setup/batch_init_countries.py
 ```
 
 #### 2️⃣ Data Processing
 ```bash
 # Enhance captions with VLM
-python scripts/02_data_processing/enhance_captions.py
+python scripts/data_processing/enhance_captions.py
 
-# Extract cultural knowledge from images
-python scripts/02_data_processing/extract_cultural_knowledge.py --load-in-4bit
+# Extract cultural knowledge
+python scripts/data_processing/extract_cultural_knowledge.py --load-in-4bit
 ```
 
 #### 3️⃣ Build Indices
 ```bash
-# Integrate knowledge to RAG
-python scripts/03_indexing/integrate_knowledge_to_rag.py
+# Build all indices for all countries
+python scripts/pipelines/build_all_country_indices.py
 
-# Build CLIP image index
-python scripts/03_indexing/build_clip_image_index.py
-
-# Build text RAG index
-python scripts/03_indexing/build_country_pack_index.py
+# Or build individually
+python scripts/indexing/build_clip_image_index.py --country korea
+python scripts/indexing/build_country_pack_index.py --country korea
 ```
 
 #### 4️⃣ Test & Evaluate
 ```bash
 # Interactive testing (main interface)
-python scripts/04_testing/test_model_agnostic_editing.py
+python scripts/testing/test_model_agnostic_editing.py
 
 # Test VLM detector only
-python scripts/04_testing/test_vlm_detector.py
+python scripts/testing/test_vlm_detector.py
 ```
 
 ---
 
-## 📋 Script Details
+## 📋 Script Categories
 
-### 01_setup/
+### setup/ - Initial Setup
+**Purpose**: One-time initialization for countries
 
-#### **init_dataset.py** ⭐ PRIMARY ENTRY POINT
-Complete one-time initialization. Runs all necessary steps automatically.
-
-**Usage:**
-```bash
-python scripts/01_setup/init_dataset.py --country korea
-```
-
-**What it does:**
-1. Converts contributions.csv to dataset JSON
-2. Downloads images from Firebase
-3. Enhances captions with VLM
-4. Extracts cultural knowledge
-5. Builds all RAG indices
+| Script | Purpose |
+|--------|---------|
+| `init_dataset.py` | ⭐ Complete initialization for single country |
+| `batch_init_countries.py` | Initialize multiple countries |
+| `create_country_datasets.py` | Create country datasets from CSV |
+| `detect_available_countries.py` | Detect available countries in data |
 
 ---
 
-### 02_data_processing/
+### data_processing/ - Data Enhancement
+**Purpose**: Enhance and extract knowledge from data
 
-#### **enhance_captions.py**
-Enhance SNS captions using VLM for better descriptions.
-
-**Usage:**
-```bash
-python scripts/02_data_processing/enhance_captions.py \
-  --input data/country_packs/korea/approved_dataset.json \
-  --output data/country_packs/korea/approved_dataset_enhanced.json \
-  --load-in-4bit
-```
-
-#### **extract_cultural_knowledge.py**
-Extract structured cultural knowledge from verified images.
-
-**Usage:**
-```bash
-# Test with 5 images
-python scripts/02_data_processing/extract_cultural_knowledge.py \
-  --max-images 5 --load-in-4bit
-
-# Full dataset
-python scripts/02_data_processing/extract_cultural_knowledge.py --load-in-4bit
-```
-
-**Output:** Structured JSON with visual features, cultural elements, correct aspects, and common mistakes.
+| Script | Purpose |
+|--------|---------|
+| `enhance_captions.py` | Enhance captions with VLM |
+| `batch_enhance_captions.py` | Batch caption enhancement |
+| `extract_cultural_knowledge.py` | Extract cultural knowledge from images |
 
 ---
 
-### 03_indexing/
+### indexing/ - Index Building
+**Purpose**: Build search indices for RAG
 
-#### **integrate_knowledge_to_rag.py**
-Integrate extracted knowledge into FAISS text index.
-
-**Usage:**
-```bash
-python scripts/03_indexing/integrate_knowledge_to_rag.py \
-  --knowledge-file data/cultural_knowledge/korea_knowledge.json \
-  --index-dir data/cultural_index/korea
-```
-
-#### **build_clip_image_index.py**
-Build CLIP image similarity index for reference image retrieval.
-
-**Usage:**
-```bash
-python scripts/03_indexing/build_clip_image_index.py \
-  --data-dir data/country_packs/korea \
-  --output-dir data/clip_index/korea
-```
-
-#### **build_country_pack_index.py**
-Build text RAG index from Wikipedia + captions.
-
-**Usage:**
-```bash
-python scripts/03_indexing/build_country_pack_index.py \
-  --country korea
-```
+| Script | Purpose |
+|--------|---------|
+| `build_clip_image_index.py` | Build CLIP image similarity index |
+| `build_country_pack_index.py` | Build text RAG index |
+| `integrate_knowledge_to_rag.py` | Integrate knowledge into FAISS |
 
 ---
 
-### 04_testing/
+### testing/ - Testing & Evaluation
+**Purpose**: Test and evaluate the system
 
-#### **test_model_agnostic_editing.py** ⭐ MAIN INTERFACE
-Interactive CLI for testing the complete T2I → Detection → I2I workflow.
-
-**Usage:**
-```bash
-# Interactive mode (recommended)
-python scripts/04_testing/test_model_agnostic_editing.py
-
-# Command-line mode
-python scripts/04_testing/test_model_agnostic_editing.py \
-  --prompt "A Korean woman in traditional hanbok" \
-  --model qwen \
-  --country korea
-```
-
-**Features:**
-- Interactive configuration wizard
-- Automatic initialization for first-time users
-- Support for multiple models (Qwen, SDXL, FLUX)
-- Model-specific prompt optimization
-
-#### **test_vlm_detector.py**
-Test VLM cultural detection on existing images.
-
-**Usage:**
-```bash
-python scripts/04_testing/test_vlm_detector.py \
-  --image-path path/to/image.jpg \
-  --country korea
-```
+| Script | Purpose |
+|--------|---------|
+| `test_model_agnostic_editing.py` | ⭐ Main interactive interface |
+| `test_vlm_detector.py` | Test VLM detector only |
+| `test_single_image.py` | Test single image processing |
 
 ---
 
-### 05_utils/
+### experiments/ - Experimental Scripts
+**Purpose**: Run experiments and benchmarks
 
-#### **download_images.py**
-Generic image downloader from URLs.
-
-#### **download_country_images.py**
-Download country pack images from Firebase.
-
-**Usage:**
-```bash
-python scripts/05_utils/download_country_images.py \
-  --country korea \
-  --output-dir ~/ccub2-agent-data/country_packs/korea/images
-```
+| Script | Purpose |
+|--------|---------|
+| `run_ours_experiment.py` | Run single experiment |
+| `run_ours_batch.py` | Run batch experiments |
+| `run_ours_full_pipeline.py` | Run full experimental pipeline |
+| `run_quick_test.py` | Quick test run |
+| `create_comparison_images.py` | Create comparison grids |
 
 ---
 
-## 🔧 Automated Pipeline
+### pipelines/ - Automated Pipelines
+**Purpose**: Automated multi-step pipelines
 
-### **run_complete_pipeline.sh**
-Automated pipeline: Extract → Integrate → Test
+| Script | Purpose |
+|--------|---------|
+| `complete_pipeline.py` | Complete pipeline for single country |
+| `complete_pipeline_all_countries.py` | Pipeline for all countries |
+| `stable_extract_all_countries.py` | Stable extraction for all countries |
+| `build_all_country_indices.py` | Build all indices for all countries |
+| `parallel_extract_knowledge.py` | Parallel knowledge extraction |
+| `run_complete_pipeline.sh` | Shell script for full pipeline |
+| `quick_build_all.sh` | Quick build script |
+| `quick_examples.sh` | Quick examples script |
 
-**Usage:**
-```bash
-# Test mode (5 images)
-bash scripts/run_complete_pipeline.sh test
+---
 
-# Full mode (all images)
-bash scripts/run_complete_pipeline.sh full
-```
+### utils/ - Utility Scripts
+**Purpose**: Utility functions and helpers
+
+| Script | Purpose |
+|--------|---------|
+| `download_images.py` | Generic image downloader |
+| `download_country_images.py` | Download country pack images |
+| `batch_download_images.py` | Batch image download |
+| `test_firebase_connection.py` | Test Firebase connection |
+| `test_job_creation_flow.py` | Test job creation |
+| `test_multi_country_support.py` | Test multi-country support |
+
+---
+
+### analysis/ - Analysis & Inspection
+**Purpose**: Analyze and inspect data
+
+| Script | Purpose |
+|--------|---------|
+| `firebase_storage_analyzer.py` | Analyze Firebase Storage structure |
+| `create_comparison_grid.py` | Create comparison image grids |
 
 ---
 
@@ -226,28 +218,47 @@ bash scripts/run_complete_pipeline.sh full
 
 | Task | Script |
 |------|--------|
-| **First-time setup** | `01_setup/init_dataset.py` |
-| **Interactive testing** | `04_testing/test_model_agnostic_editing.py` |
-| **Extract knowledge** | `02_data_processing/extract_cultural_knowledge.py` |
-| **Build indices** | `03_indexing/integrate_knowledge_to_rag.py` |
-| **Full pipeline** | `run_complete_pipeline.sh` |
+| **First-time setup** | `setup/init_dataset.py` |
+| **Interactive testing** | `testing/test_model_agnostic_editing.py` |
+| **Extract knowledge** | `data_processing/extract_cultural_knowledge.py` |
+| **Build all indices** | `pipelines/build_all_country_indices.py` |
+| **Run experiment** | `experiments/run_ours_experiment.py` |
+| **Analyze Firebase** | `analysis/firebase_storage_analyzer.py` |
 
 ---
 
-## ℹ️ About ccub2_agent Package
+## 📝 Notes
 
-The `ccub2_agent/` directory contains the core Python library that all scripts use:
+### Import Paths
 
-```
-ccub2_agent/
-├── modules/     # VLM detector, CLIP RAG, prompt adapter, etc.
-├── models/      # Universal I2I interface, model wrappers
-├── pipelines/   # Iterative editing pipeline
-└── adapters/    # Image editing adapters
-```
+All scripts import from the `ccub2_agent` package. Use new import paths:
 
-Scripts import from this package:
 ```python
-from ccub2_agent.modules import VLMCulturalDetector
-from ccub2_agent.models import UniversalI2IInterface
+# New paths (use these)
+from ccub2_agent.detection import VLMCulturalDetector
+from ccub2_agent.retrieval import CLIPImageRAG
+from ccub2_agent.adaptation import UniversalPromptAdapter
+from ccub2_agent.editing import ImageEditingAdapter
+from ccub2_agent.data import CountryDataPack, FirebaseClient
 ```
+
+### Script Organization
+
+- **setup/**: One-time initialization
+- **data_processing/**: Data enhancement
+- **indexing/**: Index building
+- **testing/**: Testing and evaluation
+- **experiments/**: Experimental runs
+- **pipelines/**: Automated pipelines
+- **utils/**: Utility functions
+- **analysis/**: Analysis and inspection
+
+---
+
+## 🎯 Best Practices
+
+1. **Use interactive mode** for first-time setup
+2. **Build indices** after data processing
+3. **Test before experiments** using testing scripts
+4. **Use pipelines** for batch operations
+5. **Check analysis scripts** for data inspection

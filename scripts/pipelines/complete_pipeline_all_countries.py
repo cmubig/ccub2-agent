@@ -102,7 +102,7 @@ def step2_build_clip_indices():
 
         cmd = [
             sys.executable,
-            str(PROJECT_ROOT / "scripts" / "03_indexing" / "build_clip_image_index.py"),
+            str(PROJECT_ROOT / "scripts" / "indexing" / "build_clip_image_index.py"),
             "--country", country,
             "--images-dir", str(images_dir),
             "--output-dir", str(output_dir)
@@ -157,7 +157,7 @@ def step3_build_rag_indices():
 
         cmd = [
             sys.executable,
-            str(PROJECT_ROOT / "scripts" / "03_indexing" / "integrate_knowledge_to_rag.py"),
+            str(PROJECT_ROOT / "scripts" / "indexing" / "integrate_knowledge_to_rag.py"),
             "--knowledge-file", str(knowledge_file),
             "--index-dir", str(index_dir),
             "--rebuild"
