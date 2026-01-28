@@ -2,11 +2,11 @@
 Governance Agents
 
 These agents handle organizational and quality governance:
-- CountryLeadAgent: Country Lead coordination and management
+- CountryRepAgent: Country Representative coordination and management
 """
 
-from .country_lead_agent import CountryLeadAgent
+from .country_rep_agent import CountryRepAgent
 
 __all__ = [
-    "CountryLeadAgent",
+    "CountryRepAgent",
 ]

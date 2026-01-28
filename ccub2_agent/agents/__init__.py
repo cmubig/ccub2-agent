@@ -38,7 +38,7 @@ from .data import (
 
 # Governance agents
 from .governance import (
-    CountryLeadAgent,
+    CountryRepAgent,
 )
 
 __all__ = [
@@ -53,6 +53,6 @@ __all__ = [
     "CaptionAgent",
     "IndexReleaseAgent",
     "DataValidatorAgent",
-    "CountryLeadAgent",
+    "CountryRepAgent",
     "VerificationAgent",
 ]

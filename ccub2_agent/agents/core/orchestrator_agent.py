@@ -102,8 +102,9 @@ class OrchestratorAgent(BaseAgent):
                     logger.info(f"Target score reached at iteration {iteration}")
                     break
                 
-                # Phase 3: Gap detection
+                # Phase 3: Gap detection + Reference retrieval
                 scout_input = {
+                    "image_path": str(current_image),  # Query image for CLIP RAG
                     "failure_modes": judge_result.data.get("failure_modes", []),
                     "country": self.config.country,
                     "category": input_data.get("category")
