@@ -1,0 +1,42 @@
+# WorldCCUB Agent Hyperparameters
+# For exact reproducibility of experiments
+
+# Loop parameters
+max_iterations: 5
+target_cultural_score: 8.5
+score_threshold: 8.0
+
+# VLM parameters
+vlm_model: "Qwen3-VL-8B"
+vlm_load_in_4bit: true
+detection_confidence_threshold: 0.7
+
+# Retrieval parameters
+clip_top_k: 3
+text_rag_top_k: 5
+retrieval_method: "hybrid"  # "CLIP", "text_rag", "hybrid"
+
+# Editing parameters
+default_i2i_model: "qwen"
+editing_strength: 0.35
+reference_strength: 0.4
+
+# Prompt adaptation
+prompt_adaptation_enabled: true
+
+# Gap analysis
+gap_analysis_enabled: true
+min_coverage_score: 0.7
+
+# Job creation
+default_target_count: 20
+job_priority: "medium"  # "low", "medium", "high"
+
+# Reproducibility
+random_seed: 42
+numpy_seed: 42
+torch_seed: 42
+
+# Logging
+log_level: "INFO"
+save_intermediate_results: true
