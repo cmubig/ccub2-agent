@@ -2,60 +2,50 @@
 
 **Model-Agnostic Cultural Bias Mitigation System**
 
-Automatically detect and correct cultural biases in generative image models using VLM-based evaluation, RAG-enhanced cultural knowledge, and **automatic model-specific prompt optimization**.
+Automatically detect and correct cultural biases in generative image models using a multi-agent loop with VLM-based evaluation, RAG-enhanced cultural knowledge, and model-specific prompt optimization.
 
-## 🎯 Key Innovation
+> **Project Milestone**: [seochan99.github.io/worldccub-agent-milestone](https://seochan99.github.io/worldccub-agent-milestone/) — NeurIPS 2026 D&B submission tracker
+
+## Key Innovation
 
 **One Universal Instruction → 6+ Model-Optimized Prompts**
 
-Our system automatically adapts editing instructions to each model's optimal format:
-- FLUX Kontext: Context-preserving instructions
-- Qwen Image Edit: Detailed, specific requirements
-- Stable Diffusion 3.5: Structured with quality tags
-- HiDream, NextStep, Custom models...
+The system automatically adapts editing instructions to each model's optimal format:
+- **FLUX Kontext**: Context-preserving instructions
+- **Qwen Image Edit**: Detailed, specific requirements
+- **Stable Diffusion 3.5**: Structured with quality tags
+- **HiDream, NextStep, Custom models**...
 
-**Result**: Best performance from every model, zero manual tuning.
+Best performance from every model, zero manual tuning.
 
-## 🚀 Quick Start
-
-### Setup
+## Quick Start
 
 ```bash
-# 1. Clone repository
+# 1. Clone
 git clone https://github.com/cmubig/ccub2-agent.git
 cd ccub2-agent
-
-# 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. Firebase Setup (Required)
-# Contact chans@andrew.cmu.edu for credentials:
+# 2. Firebase credentials (required)
+# Contact chans@andrew.cmu.edu for:
 #   - firebase-service-account.json
 #   - .firebase_config.json
-# Save both files to project root
+# Place both in project root
 
-# 4. Test Firebase connection
-python scripts/05_utils/test_firebase_connection.py
+# 3. Test connection
+python scripts/utils/test_firebase_connection.py
 
-# 5. Initialize dataset (first-time: ~2-5 hours)
-python scripts/01_setup/init_dataset.py --country korea
+# 4. Initialize dataset
+python scripts/setup/init_dataset.py --country korea
 
-# 6. Run interactive workflow
-python scripts/04_testing/test_model_agnostic_editing.py
+# 5. Run full pipeline
+python scripts/run_full_pipeline.py --country korea
 ```
 
-**The interactive CLI guides you through:**
-- T2I model selection (SDXL, FLUX)
-- I2I model selection (Qwen, SDXL, FLUX, or test all)
-- Country & category selection
-- Prompt input
-- Automatic cultural evaluation & refinement
-
-### Command-Line Mode
+### Interactive Mode
 
 ```bash
-# Direct execution with parameters
-python scripts/04_testing/test_model_agnostic_editing.py \
+python scripts/testing/test_model_agnostic_editing.py \
   --prompt "A Korean woman in traditional hanbok" \
   --model qwen \
   --t2i-model sdxl \
@@ -63,203 +53,132 @@ python scripts/04_testing/test_model_agnostic_editing.py \
   --category traditional_clothing
 ```
 
-## 📂 Project Structure
+## How It Works
 
 ```
-ccub2-agent/                    # Code repository
-├── scripts/                    # Organized workflow scripts
-│   ├── 01_setup/               # Initial setup
-│   ├── data_processing/     # Data enhancement
-│   ├── indexing/            # Build indices
-│   ├── 04_testing/             # Main testing interface
-│   └── 05_utils/               # Utilities
-├── ccub2_agent/                # Core Python library
-│   ├── modules/                # VLM, CLIP, RAG, prompt adapter
-│   ├── models/                 # Universal I2I interface
-│   ├── pipelines/              # Iterative editing
-│   └── adapters/               # Image editing adapters
-├── metric/                     # Cultural metric evaluation
-├── docs/                       # Documentation
-└── data/                       # Contributions CSV
-
-~/ccub2-agent-data/             # Generated data (not in repo)
-├── country_packs/korea/
-│   ├── approved_dataset_enhanced.json    # VLM-enhanced
-│   └── images/                           # 338 images
-├── cultural_knowledge/         # Extracted knowledge
-├── cultural_index/korea/       # RAG text index
-└── clip_index/korea/           # CLIP image index
+Input Image
+  |
+  v
+Scout Agent -----> detect cultural data gaps
+  |
+  v
+VLM Detector -----> identify cultural errors (Qwen3-VL)
+  |
+  v
+CLIP RAG ---------> retrieve reference images from 575+ verified cultural images
+  |
+  v
+Edit Agent -------> model-agnostic I2I correction (FLUX / Qwen / SD3.5 / ...)
+  |
+  v
+Judge Agent ------> evaluate result, loop if score < threshold
+  |
+  v
+Job Agent --------> if data insufficient, create collection job on WorldCCUB app
 ```
 
-## 🎯 Current Status
+## Project Structure
 
-- ✅ **Firebase Direct Integration** - Real-time data access from Firestore
-- ✅ **GPT-OSS-20B** - Upgraded question model for better cultural evaluation (20B params)
-- ✅ **Qwen3-VL-8B** - Vision-Language Model for image analysis
-- ✅ **Self-Improving System** - Automatic gap detection → job creation → retraining
-- ✅ **Model-Agnostic I2I** - Universal interface for 6+ image editing models
-- ✅ **575+ Cultural Images** - VLM-enhanced captions with cultural knowledge
-
-## 📝 Key Scripts
-
-| Script | Purpose | Usage |
-|--------|---------|-------|
-| `test_firebase_connection.py` | Test Firebase connectivity and data access | No arguments needed |
-| `init_dataset.py` | Initialize dataset from Firebase (auto-detects new data) | `--country korea` |
-| `test_model_agnostic_editing.py` | Interactive T2I→I2I pipeline with cultural evaluation | `--prompt "text" --model qwen` |
-| `extract_cultural_knowledge.py` | Extract structured knowledge from verified images | `--max-images 5 --load-in-4bit` |
-| `test_vlm_detector.py` | Test VLM cultural bias detection | `--image-path <path>` |
-| `build_clip_image_index.py` | Build CLIP FAISS index for reference images | `--data-dir <path>` |
-
-## 💡 How It Works
-
-### The Problem
-Generative AI models often produce culturally inaccurate images due to:
-- Limited cultural knowledge in training data
-- Bias towards Western/dominant culture representations
-- Lack of visual details about authentic cultural elements
-
-### Our Solution: Self-Improving Cultural Agent
-
-**1. Firebase-Powered Knowledge Base**
-- Direct integration with Firestore (575+ verified cultural images)
-- Real-time data updates from crowd-sourced contributions
-- Automatic detection of data gaps
-
-**2. Dual-Model Evaluation**
-- **GPT-OSS-20B** (20B params): Generates detailed cultural verification questions
-- **Qwen3-VL-8B**: Analyzes images and answers questions about cultural accuracy
-
-**3. RAG-Enhanced Context**
-- CLIP-based reference image retrieval
-- VLM-extracted cultural knowledge from verified images
-- Text + visual guidance for precise evaluation
-
-**4. Model-Agnostic Image Editing**
-- Universal prompt adapter for 6+ I2I models
-- Automatic optimization for each model's format
-- Iterative refinement based on VLM feedback
-
-**5. Self-Improving Loop**
 ```
-User generates → VLM detects gap ("Not enough jeogori collar data")
-→ System creates Firebase job → Users upload authentic images
-→ RAG auto-updates (89% faster!) → Accuracy improves (15% → 95%)
+ccub2-agent/
+├── ccub2_agent/                    # Core Python package
+│   ├── agents/                     # Multi-agent loop
+│   │   ├── core/                   #   Orchestrator, Scout, Edit, Judge, Job, Verification
+│   │   ├── evaluation/             #   Metric, Benchmark, ReviewQA
+│   │   ├── data/                   #   Caption, IndexRelease, DataValidator
+│   │   └── governance/             #   CountryRep
+│   ├── detection/                  # VLM cultural bias detection
+│   ├── retrieval/                  # CLIP image RAG + reference selector
+│   ├── adaptation/                 # Universal prompt adapter
+│   ├── editing/                    # I2I adapters + iterative pipeline
+│   ├── evaluation/                 # Cultural & general metrics
+│   ├── data/                       # CountryPack, Firebase, gap analysis, curation
+│   ├── models/                     # Universal interface + model registry
+│   ├── schemas/                    # Agent message protocols + provenance
+│   ├── orchestration/              # Decision logging
+│   └── reproducibility/            # Hyperparameters, splits, configs
+│
+├── scripts/                        # Workflow scripts
+│   ├── setup/                      #   Dataset initialization
+│   ├── data_processing/            #   Caption enhancement, knowledge extraction
+│   ├── indexing/                   #   CLIP & text RAG index building
+│   ├── curation/                   #   Download, license validation, merge
+│   ├── pipelines/                  #   Multi-step orchestration
+│   ├── testing/                    #   Interactive testing interface
+│   ├── experiments/                #   Experiment execution
+│   ├── analysis/                   #   Firebase storage analysis
+│   ├── utils/                      #   Downloads, Firebase tests
+│   ├── run_full_pipeline.py        #   Full pipeline entry point
+│   └── test_e2e_loop.py            #   End-to-end loop test
+│
+├── gui/                            # Web GUI (FastAPI + Next.js)
+├── examples/                       # Usage examples
+├── tests/                          # Integration tests
+└── data/                           # Country packs, indices (gitignored)
 ```
 
-### Impact
-- **Cultural Accuracy**: 30-40% → 70-90%+ with visual knowledge
-- **Model Coverage**: Works with FLUX, SD3.5, Qwen, HiDream, etc.
-- **Update Speed**: 89% faster with incremental FAISS updates
-- **Continuous Learning**: Gets smarter with each use
+## Key Scripts
 
-## 🔧 Requirements
+| Script | Purpose |
+|--------|---------|
+| `scripts/run_full_pipeline.py` | Full pipeline entry point |
+| `scripts/setup/init_dataset.py` | Initialize dataset from Firebase |
+| `scripts/testing/test_model_agnostic_editing.py` | Interactive T2I/I2I with cultural evaluation |
+| `scripts/data_processing/extract_cultural_knowledge.py` | Extract cultural knowledge from images |
+| `scripts/indexing/build_all_country_indices.py` | Build all FAISS indices for all countries |
+| `scripts/utils/test_firebase_connection.py` | Test Firebase connectivity |
+| `scripts/test_e2e_loop.py` | End-to-end agent loop test |
+
+## Data Pipeline
+
+```
+Firebase Firestore (575+ contributions)
+  → init_dataset.py (incremental sync)
+  → VLM Caption Enhancement (Qwen3-VL)
+  → Cultural Knowledge Extraction (GPT-OSS-20B + Qwen3-VL)
+  → FAISS Index Building (Text RAG + CLIP Image)
+  → Cultural Evaluation → Gap Detection → Job Creation → loop
+```
+
+## Requirements
 
 ### Hardware
 - **GPU**: 8GB+ VRAM (4-bit quantization) or 24GB+ for full precision
 - **Storage**: ~50GB for models + data
-- **RAM**: 16GB+ recommended
+- **RAM**: 16GB+
 
 ### Software
 - Python 3.10+
 - PyTorch 2.0+
-- CUDA 11.8+ (for GPU acceleration)
+- CUDA 11.8+
 
-### Models Used
-- **GPT-OSS-20B** - Question generation (16GB VRAM)
-- **Qwen3-VL-8B-Instruct** - Image evaluation (8GB VRAM)
-- **CLIP** - Image similarity search
-- **FLUX/SD3.5/Qwen** - Image generation & editing
+### Models
+| Model | Role | VRAM |
+|-------|------|------|
+| GPT-OSS-20B | Question generation | 16GB |
+| Qwen3-VL-8B-Instruct | Image evaluation | 8GB |
+| CLIP | Image similarity search | 2GB |
+| FLUX / SD3.5 / Qwen | Image generation & editing | varies |
 
-### Installation
-```bash
-pip install -r requirements.txt
-```
-
-**Note**: Firebase credentials required for data access (contact: chans@andrew.cmu.edu)
-
-## 📊 Data Pipeline
-
-```
-1. Firebase Firestore (575+ contributions)
-   ↓
-2. init_dataset.py - Auto-detects new data (incremental update)
-   ↓
-3. VLM Caption Enhancement (Qwen3-VL)
-   ↓
-4. Cultural Knowledge Extraction (GPT-OSS-20B + Qwen3-VL)
-   ↓
-5. FAISS Index Building (Text RAG + CLIP Image Index)
-   ↓
-6. Ready for Cultural Evaluation!
-   ↓
-7. VLM Evaluation → Gap Detection → Job Creation → Loop back to step 1
-```
-
-**Key Feature**: Incremental updates only process new data (89% time savings!)
-
-## 📚 Documentation
-
-- [Quick Start Guide](QUICKSTART.md) - Get started in 30 minutes
-- [Architecture](ARCHITECTURE.md) - System design and component details
-- [FAQ](FAQ.md) - Frequently asked questions
-- [Contributing](CONTRIBUTING.md) - Development setup and guidelines
-- [Changelog](CHANGELOG.md) - Version history and updates
-
-## 💾 Data Paths
-
-All data paths can be configured via command-line arguments. Default structure:
-
-| Data | Default Path |
-|------|--------------|
-| Images | `data/country_packs/korea/images/` |
-| Enhanced captions | `data/country_packs/korea/approved_dataset_enhanced.json` |
-| Output knowledge | `data/cultural_knowledge/korea_knowledge.json` |
-| RAG index | `data/cultural_index/korea/` |
-
-**Note**: Large data files are not included in the repository. Download separately or use your own dataset.
-
-## 🐛 Troubleshooting
-
-### Firebase Issues
+## Troubleshooting
 
 **Firebase connection failed?**
 ```bash
-# Test Firebase connectivity
-python scripts/05_utils/test_firebase_connection.py
-
-# System automatically falls back to CSV if Firebase unavailable
+python scripts/utils/test_firebase_connection.py
+# Falls back to CSV if Firebase unavailable
 ```
-
-**Need Firebase credentials?**
-- Contact: chans@andrew.cmu.edu
-- You'll receive: `firebase-service-account.json` and `.firebase_config.json`
-- Place both files in project root directory
-
-### GPU/Memory Issues
 
 **Out of GPU memory?**
 ```bash
-python scripts/extract_cultural_knowledge.py --load-in-4bit
+python scripts/data_processing/extract_cultural_knowledge.py --load-in-4bit
 ```
 
 **Resume from checkpoint?**
 ```bash
-python scripts/extract_cultural_knowledge.py --resume
+python scripts/data_processing/extract_cultural_knowledge.py --resume
 ```
 
-**Test before full run?**
-```bash
-python scripts/extract_cultural_knowledge.py --max-images 5
-```
-
-## 📄 License
-
-MIT License - See [LICENSE](LICENSE) file for details.
-
-## 📝 Citation
-
-If you use CCUB2-Agent in your research, please cite our paper:
+## Citation
 
 ```bibtex
 @misc{seo2025exposingblindspotsculturalbias,
@@ -275,12 +194,16 @@ If you use CCUB2-Agent in your research, please cite our paper:
 
 **Paper**: [Exposing Blindspots: Cultural Bias Evaluation in Generative Image Models](https://arxiv.org/abs/2510.20042)
 
-## 📧 Contact
+## License
 
-For Firebase credentials or questions about the project:
+MIT License - See [LICENSE](LICENSE) for details.
+
+## Contact
+
 - **Email**: chans@andrew.cmu.edu
 - **Institution**: Carnegie Mellon University
 
-## 🔗 Related Projects
+## Related
 
-- [WorldCCUB App](https://github.com/cmubig/WorldCCUB) - Crowdsourcing platform for cultural data collection
+- [WorldCCUB App](https://github.com/cmubig/WorldCCUB) — Crowdsourcing platform for cultural data collection
+- [Project Milestone](https://seochan99.github.io/worldccub-agent-milestone/) — NeurIPS 2026 D&B progress tracker
