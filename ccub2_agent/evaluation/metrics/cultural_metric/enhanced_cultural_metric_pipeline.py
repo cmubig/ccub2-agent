@@ -4,10 +4,12 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import logging
+import math
 import re
 import pickle
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Set, Any
 
@@ -24,6 +26,19 @@ from transformers import (
     AutoTokenizer,
     BitsAndBytesConfig,
 )
+
+from .taxonomy import (
+    CulturalDimension,
+    CulturalProfile,
+    DimensionScore,
+    FailurePenalty,
+    DIMENSION_QUESTION_TEMPLATES,
+    format_dimension_questions,
+    get_dimension_weights,
+)
+from .cultscore import CultScoreComputer, CultScoreConfig
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Enhanced data containers
@@ -50,6 +65,8 @@ class RetrievedDoc:
     text: str
     score: float
     metadata: Dict[str, str]
+    raw_similarity: float = 0.0  # raw FAISS similarity before authority weighting
+    source_authority: float = 1.0  # authority weight from source type
 
 
 @dataclass
@@ -73,6 +90,12 @@ class EvaluationResult:
     question_source: str  # "model", "heuristic", "fallback"
     cultural_representation_score: Optional[int] = None
     prompt_alignment_score: Optional[int] = None
+    # CultScore fields (Phase 2)
+    cultural_profile: Optional[CulturalProfile] = None
+    cultscore: Optional[float] = None
+    cultscore_confidence: Optional[float] = None
+    cultscore_penalised: Optional[float] = None
+    dimension_scores: Optional[Dict[str, float]] = None
 
 
 @dataclass
@@ -89,6 +112,14 @@ class CheckpointData:
 # ---------------------------------------------------------------------------
 
 class EnhancedCulturalKnowledgeBase:
+    # Source authority weights (C3)
+    SOURCE_AUTHORITY: Dict[str, float] = {
+        "unesco_ich": 1.0,
+        "wikipedia": 0.7,
+        "wikivoyage": 0.5,
+    }
+    DEFAULT_AUTHORITY: float = 0.5
+
     def __init__(self, index_dir: Path):
         self.index = faiss.read_index(str(index_dir / "faiss.index"))
         meta_path = index_dir / "metadata.jsonl"
@@ -97,7 +128,7 @@ class EnhancedCulturalKnowledgeBase:
         # Support both old and new key names for backward compatibility
         model_name = config.get("model_name") or config.get("embedding_model", "sentence-transformers/all-MiniLM-L6-v2")
         self.embedder = SentenceTransformer(model_name)
-        
+
         # Section priorities for different categories
         self.section_priorities = {
             "architecture": ["Culture", "History", "Geography", "Art", "Tourism"],
@@ -146,13 +177,25 @@ class EnhancedCulturalKnowledgeBase:
 
         docs: List[RetrievedDoc] = []
         preferred = set(section_bias or [])
-        
+
         # First pass: country-specific docs
         for score, idx in zip(scores[0], indices[0]):
             meta = self.metadata[idx]
             if country and meta.get("country") != country:
                 continue
-            docs.append(RetrievedDoc(text=meta["text"], score=float(score), metadata=meta))
+            raw_sim = float(score)
+            # Prefer pre-computed source_authority from metadata (Phase 3),
+            # fall back to runtime lookup by source_type.
+            if "source_authority" in meta:
+                authority = float(meta["source_authority"])
+            else:
+                source_type = meta.get("source_type", "wikipedia")
+                authority = self.SOURCE_AUTHORITY.get(source_type, self.DEFAULT_AUTHORITY)
+            weighted_score = raw_sim * authority
+            docs.append(RetrievedDoc(
+                text=meta["text"], score=weighted_score, metadata=meta,
+                raw_similarity=raw_sim, source_authority=authority,
+            ))
             if len(docs) >= top_k:
                 break
 
@@ -162,7 +205,17 @@ class EnhancedCulturalKnowledgeBase:
                 meta = self.metadata[idx]
                 if country and meta.get("country") == country:
                     continue
-                docs.append(RetrievedDoc(text=meta["text"], score=float(score), metadata=meta))
+                raw_sim = float(score)
+                if "source_authority" in meta:
+                    authority = float(meta["source_authority"])
+                else:
+                    source_type = meta.get("source_type", "wikipedia")
+                    authority = self.SOURCE_AUTHORITY.get(source_type, self.DEFAULT_AUTHORITY)
+                weighted_score = raw_sim * authority
+                docs.append(RetrievedDoc(
+                    text=meta["text"], score=weighted_score, metadata=meta,
+                    raw_similarity=raw_sim, source_authority=authority,
+                ))
                 if len(docs) >= top_k:
                     break
 
@@ -529,6 +582,43 @@ class EnhancedQuestionGenerator:
             expected_answer="yes",
             rationale="Generic fallback question for cultural appropriateness."
         )
+
+    def generate_dimensional(
+        self,
+        sample: EnhancedCulturalEvalSample,
+    ) -> Dict[CulturalDimension, List[CulturalQuestion]]:
+        """Generate dimension-tagged questions using templates (Phase 2).
+
+        Returns a dict mapping each CulturalDimension to a list of
+        CulturalQuestion objects derived from DIMENSION_QUESTION_TEMPLATES.
+        """
+        category = sample.category or "cultural"
+        variant = sample.variant or "general"
+        result: Dict[CulturalDimension, List[CulturalQuestion]] = {}
+
+        for dim in CulturalDimension:
+            questions_text = format_dimension_questions(
+                dim, sample.country, category, variant,
+            )
+            dim_questions = []
+            for q_text in questions_text:
+                # Negative-phrased probes (containing "incorrect", "foreign", etc.)
+                # expect "no" for a culturally authentic image
+                negative_keywords = [
+                    "incorrect", "misattributed", "inappropriate", "foreign",
+                    "artificial", "inaccurate", "misused", "anachronistic",
+                    "incompatible", "excessively",
+                ]
+                is_negative = any(kw in q_text.lower() for kw in negative_keywords)
+                expected = "no" if is_negative else "yes"
+                dim_questions.append(CulturalQuestion(
+                    question=q_text,
+                    expected_answer=expected,
+                    rationale=f"Dimensional template ({dim.value}) for {category} in {sample.country}",
+                ))
+            result[dim] = dim_questions
+
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -914,10 +1004,10 @@ Example: Cultural:5,Prompt:7"""
         """Normalize VLM response to yes/no/ambiguous."""
         text = text.lower().strip()
         first_word = text.split()[0] if text.split() else ""
-        
+
         yes_patterns = [r"\byes\b", r"\btrue\b", r"\by\b"]
         no_patterns = [r"\bno\b", r"\bfalse\b", r"\bn\b"]
-        
+
         for pattern in yes_patterns:
             if re.search(pattern, first_word):
                 return "yes"
@@ -925,6 +1015,85 @@ Example: Cultural:5,Prompt:7"""
             if re.search(pattern, first_word):
                 return "no"
         return "ambiguous"
+
+    # -- CultScore dimensional evaluation (Phase 2) --
+
+    def evaluate_dimension_scores(
+        self,
+        image_path: Path,
+        country: str,
+        category: str,
+        context: str,
+        variant: str = "general",
+        num_passes: int = 3,
+        temperature: float = 0.7,
+    ) -> Dict[CulturalDimension, List[float]]:
+        """Evaluate each cultural dimension with multi-pass stochastic scoring.
+
+        Returns a dict mapping each dimension to a list of 0-1 scores (one per pass).
+        """
+        dimension_raw_scores: Dict[CulturalDimension, List[float]] = {}
+
+        for dim in CulturalDimension:
+            questions = format_dimension_questions(dim, country, category, variant)
+            if not questions:
+                continue
+
+            pass_scores: List[float] = []
+            for _pass_idx in range(num_passes):
+                # Ask each question for this dimension; average yes-rate → score
+                yes_count = 0
+                total = 0
+                for q in questions:
+                    ans = self._stochastic_answer(image_path, q, context, temperature)
+                    if ans == "yes":
+                        yes_count += 1
+                    total += 1
+                pass_score = yes_count / total if total > 0 else 0.0
+                pass_scores.append(pass_score)
+
+            dimension_raw_scores[dim] = pass_scores
+
+        return dimension_raw_scores
+
+    def _stochastic_answer(
+        self, image_path: Path, question: str, context: str, temperature: float
+    ) -> str:
+        """Answer a yes/no question with stochastic sampling (do_sample=True)."""
+        try:
+            image = Image.open(image_path).convert("RGB")
+            messages = [
+                {"role": "system", "content": "You are a cultural compliance checker. Reply 'yes' or 'no'."},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": f"Context:\n{context}\nQuestion: {question}\nAnswer strictly with yes or no."},
+                        {"type": "image", "image": image},
+                    ],
+                },
+            ]
+            text_prompt = self.processor.apply_chat_template(messages, add_generation_prompt=True)
+            inputs = self.processor(text=text_prompt, images=image, return_tensors="pt", padding=True).to(self.device)
+            if "attention_mask" not in inputs:
+                inputs["attention_mask"] = torch.ones_like(inputs["input_ids"])
+
+            with torch.inference_mode():
+                outputs = self.model.generate(
+                    **inputs,
+                    max_new_tokens=32,
+                    do_sample=True,
+                    temperature=temperature,
+                    pad_token_id=self.processor.tokenizer.pad_token_id,
+                )
+                response = self.processor.decode(
+                    outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True
+                )
+
+            return self._normalize_answer(response)
+        except Exception as e:
+            if self.debug:
+                logger.debug(f"Stochastic answer failed for {image_path}: {e}")
+            return "ambiguous"
 
 
 # ---------------------------------------------------------------------------
@@ -1290,7 +1459,17 @@ def enhanced_main() -> None:
         load_in_4bit=args.load_in_4bit,
         debug=args.debug,
     )
-    
+
+    # Initialize CultScore computation engine (Phase 2)
+    cultscore_config = CultScoreConfig()
+    cultscore_computer = CultScoreComputer(cultscore_config)
+    print(f"[INIT] CultScore engine initialized (passes={cultscore_config.num_passes}, temp={cultscore_config.temperature})")
+
+    # Initialize failure detector (Phase 4)
+    from .components.failure_detector import FailureModeDetector
+    failure_detector = FailureModeDetector(vlm_model=args.vlm_model)
+    print(f"[INIT] Failure detector initialized")
+
     # Check for resume
     start_index = 0
     completed_uids = set()
@@ -1346,7 +1525,74 @@ def enhanced_main() -> None:
             
             if args.debug:
                 print(f"[DEBUG]    cultural_representative={cultural_score}, prompt_alignment={prompt_score}")
-            
+
+            # CultScore dimensional evaluation (Phase 2)
+            cultural_profile = None
+            cs_value = None
+            cs_conf = None
+            cs_pen = None
+            dim_scores_flat = None
+
+            if cultscore_computer is not None:
+                try:
+                    dim_raw = vlm.evaluate_dimension_scores(
+                        image_path=sample.image_path,
+                        country=sample.country,
+                        category=sample.category or "general",
+                        context=context_text,
+                        variant=sample.variant or "general",
+                        num_passes=cultscore_config.num_passes,
+                        temperature=cultscore_config.temperature,
+                    )
+
+                    # Compute mean source authority from retrieved docs
+                    mean_authority = (
+                        sum(d.source_authority for d in docs) / len(docs)
+                        if docs else 1.0
+                    )
+
+                    dim_scores: Dict[CulturalDimension, DimensionScore] = {}
+                    for dim, raw_list in dim_raw.items():
+                        dim_scores[dim] = cultscore_computer.build_dimension_score(
+                            dim, raw_list, source_authority=mean_authority,
+                        )
+
+                    # Phase 4: detect failures and compute penalties
+                    failure_penalties = []
+                    try:
+                        failure_detections = failure_detector.detect_enhanced(
+                            image_path=sample.image_path,
+                            country=sample.country,
+                            category=sample.category or "general",
+                            context=context_text,
+                        )
+                        failure_penalties = failure_detector.compute_penalties(failure_detections)
+                        if args.debug and failure_detections:
+                            print(f"[DEBUG]    Failures detected: {[f.mode for f in failure_detections]}")
+                    except Exception as fe:
+                        if args.debug:
+                            print(f"[DEBUG]    Failure detection skipped: {fe}")
+
+                    cultural_profile = cultscore_computer.build_cultural_profile(
+                        dimension_scores=dim_scores,
+                        category=sample.category or "general",
+                        country=sample.country,
+                        failure_penalties=failure_penalties,
+                    )
+                    cs_value = cultural_profile.cultscore
+                    cs_conf = cultural_profile.cultscore_confidence
+                    cs_pen = cultural_profile.cultscore_penalised
+                    dim_scores_flat = {
+                        dim.value: ds.raw_score
+                        for dim, ds in dim_scores.items()
+                    }
+
+                    if args.debug:
+                        print(f"[DEBUG]    CultScore={cs_value:.4f} conf={cs_conf:.4f} pen={cs_pen:.4f}")
+                except Exception as e:
+                    if args.debug:
+                        print(f"[DEBUG]    CultScore computation failed: {e}")
+
             # Create result
             result = EvaluationResult(
                 sample=sample,
@@ -1361,6 +1607,11 @@ def enhanced_main() -> None:
                 question_source=source,
                 cultural_representation_score=cultural_score,
                 prompt_alignment_score=prompt_score,
+                cultural_profile=cultural_profile,
+                cultscore=cs_value,
+                cultscore_confidence=cs_conf,
+                cultscore_penalised=cs_pen,
+                dimension_scores=dim_scores_flat,
             )
             
             results.append(result)
@@ -1430,28 +1681,44 @@ def write_enhanced_results(
 ) -> None:
     """Write enhanced results with group evaluation data."""
     # Write summary
+    # Dimension column names
+    dim_names = [d.value for d in CulturalDimension]
+
     summary_csv.parent.mkdir(parents=True, exist_ok=True)
     with open(summary_csv, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow([
             "uid", "group_id", "step", "country", "category", "sub_category", "variant",
             "accuracy", "precision", "recall", "f1", "num_questions",
-            "processing_time", "question_source", "cultural_representative", "prompt_alignment", 
+            "processing_time", "question_source", "cultural_representative", "prompt_alignment",
+            "cultscore", "cultscore_confidence", "cultscore_penalised",
+        ] + [f"dim_{d}" for d in dim_names] + [
             "is_best", "is_worst"
         ])
-        
+
         for result in results:
             sample = result.sample
             group_eval = group_evaluations.get(sample.group_id, {})
             is_best = sample.uid == group_eval.get("best_uid", "")
             is_worst = sample.uid == group_eval.get("worst_uid", "")
-            
+
+            dim_values = []
+            for d in dim_names:
+                if result.dimension_scores and d in result.dimension_scores:
+                    dim_values.append(f"{result.dimension_scores[d]:.4f}")
+                else:
+                    dim_values.append("")
+
             writer.writerow([
                 sample.uid, sample.group_id, sample.step, sample.country,
                 sample.category or "", sample.sub_category or "", sample.variant or "",
                 result.accuracy, result.precision, result.recall, result.f1,
                 result.num_questions, result.processing_time, result.question_source,
                 result.cultural_representation_score or 0, result.prompt_alignment_score or 0,
+                f"{result.cultscore:.4f}" if result.cultscore is not None else "",
+                f"{result.cultscore_confidence:.4f}" if result.cultscore_confidence is not None else "",
+                f"{result.cultscore_penalised:.4f}" if result.cultscore_penalised is not None else "",
+            ] + dim_values + [
                 is_best, is_worst
             ])
     
@@ -1461,16 +1728,19 @@ def write_enhanced_results(
         writer = csv.writer(f)
         writer.writerow([
             "uid", "group_id", "step", "country", "category", "sub_category", "variant",
-            "question", "expected_answer", "actual_answer", "question_rationale"
+            "question", "expected_answer", "actual_answer", "question_rationale",
+            "cultscore", "cultscore_confidence",
         ])
-        
+
         for result in results:
             sample = result.sample
             for q, a in zip(result.questions, result.answers):
                 writer.writerow([
                     sample.uid, sample.group_id, sample.step, sample.country,
                     sample.category or "", sample.sub_category or "", sample.variant or "",
-                    q.question, q.expected_answer, a, q.rationale
+                    q.question, q.expected_answer, a, q.rationale,
+                    f"{result.cultscore:.4f}" if result.cultscore is not None else "",
+                    f"{result.cultscore_confidence:.4f}" if result.cultscore_confidence is not None else "",
                 ])
 
 
