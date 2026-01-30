@@ -44,9 +44,12 @@ class CLIPImageRAG:
         self.model_name = model_name
         self.index_dir = Path(index_dir) if index_dir else None
 
-        # Determine device
+        # Determine device - use GPU 1 if available (GPU 0 is for VLM)
         if device == "auto":
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+            if torch.cuda.is_available():
+                self.device = "cuda:1" if torch.cuda.device_count() >= 2 else "cuda:0"
+            else:
+                self.device = "cpu"
         else:
             self.device = device
 
@@ -110,11 +113,12 @@ class CLIPImageRAG:
         inputs = self.processor(images=image, return_tensors="pt")
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
-        # Get CLIP image embedding
-        outputs = self.model.get_image_features(**inputs)
+        # Get CLIP image embedding (vision_model → visual_projection → 512-dim)
+        vision_outputs = self.model.vision_model(pixel_values=inputs["pixel_values"])
+        image_embeds = self.model.visual_projection(vision_outputs.pooler_output)
 
         # Normalize (CLIP embeddings should be normalized for cosine similarity)
-        embedding = outputs.cpu().numpy()[0]
+        embedding = image_embeds.cpu().numpy()[0]
         embedding = embedding / np.linalg.norm(embedding)
 
         return embedding

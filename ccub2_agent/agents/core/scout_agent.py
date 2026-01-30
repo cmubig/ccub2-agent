@@ -29,15 +29,15 @@ class ScoutAgent(BaseAgent):
     - Prioritize data collection needs
     """
 
-    def __init__(self, config: AgentConfig, index_base: Optional[Path] = None):
+    def __init__(self, config: AgentConfig, index_base: Optional[Path] = None, shared_clip_rag: Optional[CLIPImageRAG] = None):
         super().__init__(config)
         # Initialize country pack for gap analysis
         country_pack = CountryDataPack(config.country)
         self.gap_analyzer = DataGapAnalyzer(country_pack)
 
-        # CLIP RAG initialization (lazy loading)
+        # CLIP RAG initialization (lazy loading or shared)
         self.index_base = index_base or DEFAULT_INDEX_BASE
-        self._clip_rag: Optional[CLIPImageRAG] = None
+        self._clip_rag: Optional[CLIPImageRAG] = shared_clip_rag
 
     def _get_clip_rag(self, country: str) -> Optional[CLIPImageRAG]:
         """Get or initialize CLIP RAG for the specified country."""

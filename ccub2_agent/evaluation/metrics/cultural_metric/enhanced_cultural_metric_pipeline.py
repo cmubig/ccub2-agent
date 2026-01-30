@@ -21,7 +21,7 @@ from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 from transformers import (
     AutoModelForCausalLM,
-    AutoModelForVision2Seq,
+    AutoModelForImageTextToText,
     AutoProcessor,
     AutoTokenizer,
     BitsAndBytesConfig,
@@ -654,19 +654,15 @@ class EnhancedVLMClient:
         debug: bool = False,
     ) -> None:
         model_kwargs = {"trust_remote_code": True}
-        
-        if load_in_8bit or load_in_4bit:
-            quant_config = BitsAndBytesConfig(
-                load_in_4bit=load_in_4bit,
-                load_in_8bit=load_in_8bit,
-                bnb_4bit_compute_dtype=torch.float16,
-                bnb_4bit_use_double_quant=True,
-                bnb_4bit_quant_type="nf4"
-            )
-            model_kwargs["quantization_config"] = quant_config
-        
+
+        # Use fp16 directly — RTX 4090 24GB has enough VRAM for 8B model (~17GB).
+        # BitsAndBytes 4-bit quantization crashes on this environment, so use fp16 instead.
+        model_kwargs["dtype"] = torch.float16
+
         self.processor = AutoProcessor.from_pretrained(model_name, trust_remote_code=True, use_fast=True)
-        self.model = AutoModelForVision2Seq.from_pretrained(model_name, device_map="auto", **model_kwargs)
+        # Pin VLM to GPU 0 so GPU 1 stays free for the Edit model
+        _device_map = {"": 0} if torch.cuda.device_count() >= 2 else "auto"
+        self.model = AutoModelForImageTextToText.from_pretrained(model_name, device_map=_device_map, **model_kwargs)
         self.model.eval()
         self.device = device
         self.debug = debug

@@ -2,11 +2,14 @@
 Orchestrator Agent - Master controller for WorldCCUB Multi-Agent Loop.
 
 Coordinates all specialized agents to execute the cultural improvement pipeline.
+GPU strategy: VLM (Qwen3-VL-8B) on GPU 0, CLIP + Edit on GPU 1.
+Models are created once and shared across agents to avoid duplicate loading.
 """
 
 from typing import Dict, Any, List, Optional
 import logging
 from pathlib import Path
+import time
 
 from ..base_agent import BaseAgent, AgentConfig, AgentResult
 from .scout_agent import ScoutAgent
@@ -17,40 +20,73 @@ from .verification_agent import VerificationAgent
 
 logger = logging.getLogger(__name__)
 
+# Project data dirs
+_PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+_CLIP_INDEX_BASE = _PROJECT_ROOT / "data" / "clip_index"
+
 
 class OrchestratorAgent(BaseAgent):
     """
     Master controller for the multi-agent loop.
-    
+
     Responsibilities:
     - Initialize and coordinate all agents
     - Manage loop state and iteration tracking
     - Route tasks to appropriate agents
     - Handle loop termination conditions
-    
-    Enhanced with VerificationAgent (MA-RAG pattern) for reference verification.
+
+    GPU allocation:
+    - GPU 0: VLM (Qwen3-VL-8B) for Judge + Detection
+    - GPU 1: CLIP (reference retrieval) + Edit model
+    Models are loaded once and shared across agents.
     """
-    
+
     def __init__(self, config: AgentConfig):
         super().__init__(config)
-        
-        # Initialize sub-agents
-        self.scout_agent = ScoutAgent(config)
+
+        # ---- Load shared models (each on its own GPU) ----
+        t_start = time.time()
+
+        # 1. CLIP RAG on GPU 1 (small, loads fast)
+        logger.info("Loading CLIP RAG → GPU 1...")
+        shared_clip = None
+        clip_index_dir = _CLIP_INDEX_BASE / config.country
+        if clip_index_dir.exists():
+            from ...retrieval.clip_image_rag import CLIPImageRAG
+            shared_clip = CLIPImageRAG(index_dir=clip_index_dir, device="auto")
+            logger.info(f"CLIP RAG loaded on GPU 1")
+        else:
+            logger.warning(f"No CLIP index for {config.country}")
+
+        # 2. VLM detector on GPU 0 (heavy, takes longer)
+        logger.info("Loading VLM (Qwen3-VL-8B) → GPU 0...")
+        from ...detection.vlm_detector import VLMCulturalDetector
+        cultural_index_dir = _PROJECT_ROOT / "data" / "cultural_index" / config.country
+        shared_vlm = VLMCulturalDetector(
+            load_in_4bit=True,
+            index_dir=cultural_index_dir if cultural_index_dir.exists() else None,
+            clip_index_dir=clip_index_dir if clip_index_dir.exists() else None,
+        )
+
+        logger.info(f"All models loaded in {time.time()-t_start:.1f}s")
+
+        # ---- Initialize sub-agents with shared models ----
+        self.judge_agent = JudgeAgent(config, shared_vlm_detector=shared_vlm)
+        self.scout_agent = ScoutAgent(config, shared_clip_rag=shared_clip)
         self.edit_agent = EditAgent(config)
-        self.judge_agent = JudgeAgent(config)
         self.job_agent = JobAgent(config)
-        self.verification_agent = VerificationAgent(config)  # NEW: Reference verification
-        
+        self.verification_agent = VerificationAgent(config)
+
         # Loop state
         self.current_iteration = 0
         self.max_iterations = 5
         self.score_threshold = 8.0
         self.score_history: List[float] = []
-    
+
     def execute(self, input_data: Dict[str, Any]) -> AgentResult:
         """
         Execute the full multi-agent loop.
-        
+
         Args:
             input_data: {
                 "image_path": str,
@@ -60,7 +96,7 @@ class OrchestratorAgent(BaseAgent):
                 "max_iterations": int (optional),
                 "score_threshold": float (optional)
             }
-            
+
         Returns:
             AgentResult with final image, scores, and iteration history
         """
@@ -70,10 +106,10 @@ class OrchestratorAgent(BaseAgent):
             self.max_iterations = input_data.get("max_iterations", 5)
             self.score_threshold = input_data.get("score_threshold", 8.0)
             self.score_history = []
-            
+
             current_image = Path(input_data["image_path"])
             prompt = input_data["prompt"]
-            
+
             # Phase 1: Initial evaluation
             judge_input = {
                 "image_path": str(current_image),
@@ -81,7 +117,7 @@ class OrchestratorAgent(BaseAgent):
                 "country": self.config.country,
                 "category": input_data.get("category")
             }
-            
+
             judge_result = self.judge_agent.execute(judge_input)
             if not judge_result.success:
                 return AgentResult(
@@ -89,28 +125,28 @@ class OrchestratorAgent(BaseAgent):
                     data={},
                     message=f"Initial evaluation failed: {judge_result.message}"
                 )
-            
+
             cultural_score = judge_result.data.get("cultural_score", 0)
             self.score_history.append(cultural_score)
-            
+
             # Phase 2-6: Iterative improvement loop
             for iteration in range(1, self.max_iterations + 1):
                 self.current_iteration = iteration
-                
+
                 # Check termination conditions
                 if cultural_score >= self.score_threshold:
                     logger.info(f"Target score reached at iteration {iteration}")
                     break
-                
+
                 # Phase 3: Gap detection + Reference retrieval
                 scout_input = {
-                    "image_path": str(current_image),  # Query image for CLIP RAG
+                    "image_path": str(current_image),
                     "failure_modes": judge_result.data.get("failure_modes", []),
                     "country": self.config.country,
                     "category": input_data.get("category")
                 }
                 scout_result = self.scout_agent.execute(scout_input)
-                
+
                 # Phase 4: Job creation (if needed)
                 if scout_result.data.get("needs_more_data", False):
                     job_input = {
@@ -119,12 +155,10 @@ class OrchestratorAgent(BaseAgent):
                         "missing_elements": scout_result.data.get("missing_elements", [])
                     }
                     self.job_agent.execute(job_input)
-                
-                # Phase 4.5: Reference Verification (NEW)
-                # Get references from Scout (would need to integrate ReferenceSelector)
-                # For now, use issues to get references
+
+                # Phase 4.5: Reference Verification
                 references = scout_result.data.get("references", [])
-                
+
                 if references:
                     verification_input = {
                         "references": references,
@@ -135,12 +169,11 @@ class OrchestratorAgent(BaseAgent):
                         "original_image_path": str(current_image)
                     }
                     verification_result = self.verification_agent.execute(verification_input)
-                    
+
                     if verification_result.success:
-                        # Use only verified references
                         references = verification_result.data.get("verified_references", [])
                         logger.info(f"Verified {len(references)} references (filtered {verification_result.data.get('filtered_count', 0)})")
-                
+
                 # Phase 5: Edit
                 edit_input = {
                     "image_path": str(current_image),
@@ -150,23 +183,23 @@ class OrchestratorAgent(BaseAgent):
                     "country": self.config.country
                 }
                 edit_result = self.edit_agent.execute(edit_input)
-                
+
                 if not edit_result.success:
                     logger.warning(f"Edit failed at iteration {iteration}")
                     break
-                
+
                 current_image = Path(edit_result.data["output_image"])
-                
+
                 # Phase 6: Re-evaluation
                 judge_input["image_path"] = str(current_image)
                 judge_result = self.judge_agent.execute(judge_input)
-                
+
                 if not judge_result.success:
                     break
-                
+
                 cultural_score = judge_result.data.get("cultural_score", 0)
                 self.score_history.append(cultural_score)
-            
+
             # Final result
             return AgentResult(
                 success=True,
@@ -179,7 +212,7 @@ class OrchestratorAgent(BaseAgent):
                 },
                 message=f"Loop completed after {self.current_iteration} iterations"
             )
-            
+
         except Exception as e:
             logger.error(f"Orchestrator execution failed: {e}", exc_info=True)
             return AgentResult(

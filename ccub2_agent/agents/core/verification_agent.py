@@ -8,14 +8,9 @@ and preventing cultural hallucination.
 from typing import Dict, Any, List, Optional
 import logging
 from pathlib import Path
-import sys
 
 from ..base_agent import BaseAgent, AgentConfig, AgentResult
 
-# Add metric module to path for VLM
-METRIC_PATH = Path(__file__).parent.parent.parent.parent / "evaluation" / "metrics" / "cultural_metric"
-if str(METRIC_PATH) not in sys.path:
-    sys.path.insert(0, str(METRIC_PATH))
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +37,7 @@ class VerificationAgent(BaseAgent):
         """Lazy load VLM client."""
         if self._vlm_client is None:
             try:
-                from enhanced_cultural_metric_pipeline import EnhancedVLMClient
+                from ccub2_agent.evaluation.metrics.cultural_metric.enhanced_cultural_metric_pipeline import EnhancedVLMClient
                 self._vlm_client = EnhancedVLMClient(
                     model_name="Qwen/Qwen3-VL-8B-Instruct",
                     load_in_4bit=True,

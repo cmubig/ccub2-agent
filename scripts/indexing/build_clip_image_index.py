@@ -27,7 +27,7 @@ from tqdm import tqdm
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from ccub2_agent.modules.clip_image_rag import CLIPImageRAG
+from ccub2_agent.retrieval.clip_image_rag import CLIPImageRAG
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -52,7 +52,7 @@ def find_images(images_dir: Path, dataset_path: Path = None) -> List[Dict[str, A
         logger.info(f"Loading descriptions from {dataset_path}")
         with open(dataset_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
-            items = data.get('items', [])
+            items = data if isinstance(data, list) else data.get('items', [])
             for item in items:
                 # Map by image_path or filename
                 img_path = item.get('image_path', '')

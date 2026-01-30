@@ -15,17 +15,20 @@ logger = logging.getLogger(__name__)
 class JudgeAgent(BaseAgent):
     """
     Re-evaluates outputs and makes loop decisions.
-    
+
     Responsibilities:
     - Score cultural authenticity (1-10)
     - Detect failure modes
     - Decide STOP vs ITERATE
     - Generate feedback for Edit Agent
     """
-    
-    def __init__(self, config: AgentConfig):
+
+    def __init__(self, config: AgentConfig, shared_vlm_detector: "VLMCulturalDetector | None" = None):
         super().__init__(config)
-        self.vlm_detector = VLMCulturalDetector(load_in_4bit=True)
+        if shared_vlm_detector is not None:
+            self.vlm_detector = shared_vlm_detector
+        else:
+            self.vlm_detector = VLMCulturalDetector(load_in_4bit=True)
     
     def execute(self, input_data: Dict[str, Any]) -> AgentResult:
         """

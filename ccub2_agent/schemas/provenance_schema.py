@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, HttpUrl
 
@@ -41,7 +41,7 @@ class CurationPlatform(str, Enum):
 class UserSubmittedProvenance(BaseModel):
     """Provenance record for user-submitted images."""
 
-    source: DataSource = Field(default=DataSource.USER_SUBMITTED)
+    source: Literal[DataSource.USER_SUBMITTED] = Field(default=DataSource.USER_SUBMITTED)
     contributor_id: str = Field(..., description="Firebase UID of the contributor")
     consent_documented: bool = Field(default=True)
     country_rep_approved: bool = Field(default=False)
@@ -52,7 +52,7 @@ class UserSubmittedProvenance(BaseModel):
 class CuratedProvenance(BaseModel):
     """Provenance record for curated (open-license) images."""
 
-    source: DataSource = Field(default=DataSource.CURATED)
+    source: Literal[DataSource.CURATED] = Field(default=DataSource.CURATED)
     original_url: str = Field(..., description="Original URL of the image")
     license: License = Field(..., description="License of the source image")
     attribution: str = Field(..., description="Required attribution text")
@@ -68,7 +68,7 @@ class CuratedProvenance(BaseModel):
 class PartnerProvenance(BaseModel):
     """Provenance record for partner-institution images."""
 
-    source: DataSource = Field(default=DataSource.PARTNER)
+    source: Literal[DataSource.PARTNER] = Field(default=DataSource.PARTNER)
     institution: str = Field(..., description="Name of the partner institution")
     agreement_id: str = Field(..., description="Data sharing agreement reference")
     license: License = Field(...)

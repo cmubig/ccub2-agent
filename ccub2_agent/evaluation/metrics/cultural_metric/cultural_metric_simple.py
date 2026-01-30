@@ -15,7 +15,7 @@ from PIL import Image
 from sentence_transformers import SentenceTransformer
 from transformers import (
     AutoModelForCausalLM,
-    AutoModelForVision2Seq,
+    AutoModelForImageTextToText,
     AutoProcessor,
     AutoTokenizer,
     BitsAndBytesConfig,
@@ -444,7 +444,7 @@ class SimpleVLMClient:
             model_kwargs["quantization_config"] = quant_config
         
         self.processor = AutoProcessor.from_pretrained(model_name, trust_remote_code=True, use_fast=True)
-        self.model = AutoModelForVision2Seq.from_pretrained(model_name, device_map="auto", **model_kwargs)
+        self.model = AutoModelForImageTextToText.from_pretrained(model_name, device_map="auto", **model_kwargs)
         self.model.eval()
         self.device = device
         self.debug = debug

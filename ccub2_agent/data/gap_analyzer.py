@@ -84,18 +84,29 @@ class DataGapAnalyzer:
 
         # 2. Failure-mode-derived gaps
         for fm in failure_modes:
-            fm_cat = fm.get("category", "")
-            fm_element = fm.get("element", fm.get("description", "unknown"))
-            normalized = normalize_category(fm_cat) if fm_cat else "uncategorized"
+            if isinstance(fm, str):
+                # Handle simple string failure modes from JudgeAgent
+                gaps.append({
+                    "element": fm,
+                    "category": "uncategorized",
+                    "severity": "medium",
+                    "current_count": 0,
+                    "needed": 5,
+                    "source": "failure_mode",
+                })
+            else:
+                fm_cat = fm.get("category", "")
+                fm_element = fm.get("element", fm.get("description", "unknown"))
+                normalized = normalize_category(fm_cat) if fm_cat else "uncategorized"
 
-            gaps.append({
-                "element": fm_element,
-                "category": normalized,
-                "severity": fm.get("severity", "medium"),
-                "current_count": cat_counts.get(normalized, 0),
-                "needed": fm.get("needed", 5),
-                "source": "failure_mode",
-            })
+                gaps.append({
+                    "element": fm_element,
+                    "category": normalized,
+                    "severity": fm.get("severity", "medium"),
+                    "current_count": cat_counts.get(normalized, 0),
+                    "needed": fm.get("needed", 5),
+                    "source": "failure_mode",
+                })
 
         # Sort: high severity first, then by deficit
         severity_order = {"high": 0, "medium": 1, "low": 2}

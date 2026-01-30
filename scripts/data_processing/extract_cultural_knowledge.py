@@ -19,7 +19,7 @@ from dataclasses import dataclass, asdict
 
 import torch
 from PIL import Image
-from transformers import AutoProcessor, AutoModelForVision2Seq, BitsAndBytesConfig
+from transformers import AutoProcessor, AutoModelForImageTextToText, BitsAndBytesConfig
 from tqdm import tqdm
 
 logging.basicConfig(level=logging.INFO)
@@ -82,7 +82,7 @@ class CulturalKnowledgeExtractor:
             trust_remote_code=True,
             use_fast=True
         )
-        self.model = AutoModelForVision2Seq.from_pretrained(
+        self.model = AutoModelForImageTextToText.from_pretrained(
             model_name,
             device_map="auto",
             **model_kwargs

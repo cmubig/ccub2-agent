@@ -128,10 +128,17 @@ class QwenImageEditor(BaseImageEditor):
             torch_dtype=dtype,
         )
 
-        # Use CPU offload to save GPU memory (needed when VLM is also loaded)
-        if self.device == "cuda":
-            self.pipe.enable_sequential_cpu_offload()
-            logger.info("✓ Qwen model loaded with sequential CPU offload")
+        # Qwen-Image-Edit-2509 transformer alone needs ~23GB in bf16,
+        # which exceeds 24GB GPU when other models (CLIP, VLM) share memory.
+        # Use sequential CPU offload: moves individual layers to GPU one at a time,
+        # keeping peak VRAM usage low (~4-6GB) at the cost of slower inference.
+        if self.device.startswith("cuda"):
+            if torch.cuda.device_count() >= 2:
+                gpu_id = 1
+            else:
+                gpu_id = 0
+            self.pipe.enable_sequential_cpu_offload(gpu_id=gpu_id)
+            logger.info(f"✓ Qwen model loaded with sequential CPU offload on cuda:{gpu_id}")
         else:
             self.pipe = self.pipe.to(self.device)
 

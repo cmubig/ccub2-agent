@@ -10,12 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import logging
 import sys
 
-# Add metric module to path
-METRIC_PATH = Path(__file__).parent.parent / "evaluation" / "metrics" / "cultural_metric"
-if str(METRIC_PATH) not in sys.path:
-    sys.path.insert(0, str(METRIC_PATH))
-
-from enhanced_cultural_metric_pipeline import (
+from ..evaluation.metrics.cultural_metric.enhanced_cultural_metric_pipeline import (
     EnhancedVLMClient,
     EnhancedCulturalKnowledgeBase,
     EnhancedCulturalEvalSample,
@@ -613,6 +608,7 @@ Now analyze this image:"""
         iteration_number: int = 0,
         previous_cultural_score: Optional[int] = None,
         previous_prompt_score: Optional[int] = None,
+        category: Optional[str] = None,
     ) -> Tuple[int, int]:
         """
         Get cultural quality scores.
