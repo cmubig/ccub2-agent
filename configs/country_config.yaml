@@ -1,0 +1,222 @@
+# WorldCCUB Multi-Country Configuration
+# 20 countries × 300 images × 8 categories = 6,000 total
+
+# Target countries (Phase 1-3)
+# Grouped by region for diversity
+
+benchmark:
+  name: "WorldCCUB"
+  version: "1.0"
+  target_images_per_country: 300
+  target_countries: 20
+  total_target_images: 6000
+  categories: 8
+  images_per_category: 38  # 300 / 8 ≈ 37.5
+
+# 8 Cultural Categories (aligned with CultScore taxonomy)
+categories:
+  - id: architecture
+    display: "Architecture"
+    min_per_country: 30
+  - id: art
+    display: "Art & Crafts"
+    min_per_country: 30
+  - id: food
+    display: "Food & Drink"
+    min_per_country: 30
+  - id: fashion
+    display: "Fashion & Clothing"
+    min_per_country: 30
+  - id: event
+    display: "Festivals & Events"
+    min_per_country: 30
+  - id: people
+    display: "People & Daily Life"
+    min_per_country: 30
+  - id: landscape
+    display: "Landscape & Nature"
+    min_per_country: 30
+  - id: wildlife
+    display: "Wildlife & Animals"
+    min_per_country: 30
+
+# Data source composition per country
+data_sources:
+  user_submitted:
+    target_pct: 60
+    target_per_country: 180  # 300 × 0.6
+    description: "Country Rep + contributor submissions via WorldCCUB app"
+  agent_curated:
+    target_pct: 30
+    target_per_country: 90   # 300 × 0.3
+    sources:
+      - "wikimedia_commons"
+      - "pixabay"
+      - "unsplash"
+    description: "Agent-curated from open license sources, verified by Rep"
+  partner_institution:
+    target_pct: 10
+    target_per_country: 30   # 300 × 0.1
+    description: "Museums, universities, cultural institutions"
+
+# Country Representative structure
+country_rep:
+  reps_per_country: 3
+  min_submissions_per_rep: 50
+  min_verifications_per_rep: 50
+  total_contribution_per_rep: 100  # 50 submit + 50 verify
+  total_reps: 60  # 20 × 3
+
+# Target countries grouped by region
+countries:
+  # East Asia (4)
+  - id: korea
+    display: "South Korea"
+    phase: 0  # Pilot (current)
+    status: active
+    current_images: 575
+    reps: []  # Core team
+  - id: japan
+    display: "Japan"
+    phase: 1
+    status: planned
+    reps: []
+  - id: china
+    display: "China"
+    phase: 1
+    status: planned
+    reps: []
+  - id: taiwan
+    display: "Taiwan"
+    phase: 1
+    status: planned
+    reps: []
+
+  # Southeast Asia (4)
+  - id: thailand
+    display: "Thailand"
+    phase: 1
+    status: planned
+    reps: []
+  - id: vietnam
+    display: "Vietnam"
+    phase: 1
+    status: planned
+    reps: []
+  - id: indonesia
+    display: "Indonesia"
+    phase: 1
+    status: planned
+    reps: []
+  - id: philippines
+    display: "Philippines"
+    phase: 2
+    status: planned
+    reps: []
+
+  # South Asia (2)
+  - id: india
+    display: "India"
+    phase: 1
+    status: planned
+    reps: []
+  - id: pakistan
+    display: "Pakistan"
+    phase: 2
+    status: planned
+    reps: []
+
+  # Middle East (2)
+  - id: turkey
+    display: "Turkey"
+    phase: 2
+    status: planned
+    reps: []
+  - id: saudi_arabia
+    display: "Saudi Arabia"
+    phase: 2
+    status: planned
+    reps: []
+
+  # Africa (2)
+  - id: nigeria
+    display: "Nigeria"
+    phase: 2
+    status: planned
+    reps: []
+  - id: kenya
+    display: "Kenya"
+    phase: 2
+    status: planned
+    reps: []
+
+  # Europe (3)
+  - id: france
+    display: "France"
+    phase: 1
+    status: planned
+    reps: []
+  - id: germany
+    display: "Germany"
+    phase: 2
+    status: planned
+    reps: []
+  - id: italy
+    display: "Italy"
+    phase: 2
+    status: planned
+    reps: []
+
+  # Americas (3)
+  - id: usa
+    display: "United States"
+    phase: 1
+    status: planned
+    reps: []
+  - id: brazil
+    display: "Brazil"
+    phase: 2
+    status: planned
+    reps: []
+  - id: mexico
+    display: "Mexico"
+    phase: 2
+    status: planned
+    reps: []
+
+# Experiment phases
+phases:
+  phase_0:
+    name: "Korea Pilot"
+    description: "Full pipeline validation with 575 Korean images"
+    success_criteria:
+      avg_improvement: 2.0
+      human_correlation: 0.7
+    status: in_progress
+
+  phase_1:
+    name: "Country Rep Recruitment"
+    weeks: "W3-W6"
+    description: "Recruit reps via IASEAI'26, distribute guidelines + app"
+    target_countries: 8  # First wave
+
+  phase_2:
+    name: "Data Rush"
+    weeks: "W7-W12"
+    description: "Agent curation + user submissions + per-country indexing"
+    target_countries: 20
+
+  phase_3:
+    name: "Submission"
+    weeks: "W13-W16"
+    description: "Full benchmark, ablation study, human eval, paper"
+
+# Paper author structure
+authorship:
+  core_team:
+    count: 5
+    position: "1-5"
+  country_reps:
+    count: 60  # 20 × 3
+    position: "alphabetical after core team"
+    min_contribution: 50  # images curated/verified
