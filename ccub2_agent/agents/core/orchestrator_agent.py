@@ -71,11 +71,13 @@ class OrchestratorAgent(BaseAgent):
         logger.info(f"All models loaded in {time.time()-t_start:.1f}s")
 
         # ---- Initialize sub-agents with shared models ----
+        self.clip_rag = shared_clip  # Keep reference for unload/reload around edit phase
+        self.vlm_detector = shared_vlm  # Keep reference for sharing with verification agent
         self.judge_agent = JudgeAgent(config, shared_vlm_detector=shared_vlm)
         self.scout_agent = ScoutAgent(config, shared_clip_rag=shared_clip)
         self.edit_agent = EditAgent(config)
         self.job_agent = JobAgent(config)
-        self.verification_agent = VerificationAgent(config)
+        self.verification_agent = VerificationAgent(config, shared_vlm_detector=shared_vlm)
 
         # Loop state
         self.current_iteration = 0
@@ -174,15 +176,30 @@ class OrchestratorAgent(BaseAgent):
                         references = verification_result.data.get("verified_references", [])
                         logger.info(f"Verified {len(references)} references (filtered {verification_result.data.get('filtered_count', 0)})")
 
-                # Phase 5: Edit
+                # Phase 5: Edit — free GPU 1 VRAM by unloading CLIP first
+                if self.clip_rag is not None:
+                    self.clip_rag.unload()
+
+                # Fix 7: Pass structured knowledge to Edit for targeted corrections
+                item_knowledge = None
+                if self.vlm_detector.structured_knowledge:
+                    item_id = Path(input_data["image_path"]).stem
+                    item_knowledge = self.vlm_detector.structured_knowledge.get(item_id)
+
                 edit_input = {
                     "image_path": str(current_image),
                     "prompt": prompt,
                     "issues": judge_result.data.get("issues", []),
                     "references": [r.get("image_path") for r in references] if references else [],
-                    "country": self.config.country
+                    "country": self.config.country,
+                    "category": input_data.get("category"),
+                    "item_knowledge": item_knowledge,
                 }
                 edit_result = self.edit_agent.execute(edit_input)
+
+                # Reload CLIP after edit completes (needed for next iteration's retrieval)
+                if self.clip_rag is not None:
+                    self.clip_rag.reload()
 
                 if not edit_result.success:
                     logger.warning(f"Edit failed at iteration {iteration}")
