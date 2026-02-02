@@ -174,6 +174,24 @@ class VLMCulturalDetector:
             else:
                 context = ref_context
 
+        # Fix 6: Inject structured knowledge into detection context
+        if self.structured_knowledge:
+            item_id = Path(image_path).stem
+            item_kb = self.structured_knowledge.get(item_id)
+            if item_kb:
+                kb_parts = []
+                if item_kb.get("visual_features"):
+                    kb_parts.append(f"Visual: {item_kb['visual_features']}")
+                if item_kb.get("cultural_elements"):
+                    kb_parts.append(f"Cultural elements: {item_kb['cultural_elements']}")
+                if item_kb.get("common_mistakes"):
+                    mistakes = item_kb["common_mistakes"]
+                    if isinstance(mistakes, list):
+                        mistakes = "; ".join(mistakes[:5])
+                    kb_parts.append(f"Common mistakes to check: {mistakes}")
+                structured_ctx = "\n".join(kb_parts)
+                context = structured_ctx + "\n\n" + context if context else structured_ctx
+
         # Get VLM scores with iteration context
         cultural_score, prompt_score = self.vlm.evaluate_cultural_scores(
             image_path=image_path,
@@ -639,6 +657,39 @@ Now analyze this image:"""
             )
             docs = self.kb.retrieve_contextual(prompt, sample, top_k=3)
             context = "\n".join(doc.text for doc in docs)
+
+        # Fix 6: Inject structured knowledge (korea_knowledge.json) into context
+        # Match by image filename → item_id for exact per-image knowledge
+        if self.structured_knowledge:
+            item_id = Path(image_path).stem  # e.g. "01vCHXPdeqCNMg5Sr5al"
+            item_kb = self.structured_knowledge.get(item_id)
+            if item_kb:
+                kb_parts = []
+                if item_kb.get("visual_features"):
+                    kb_parts.append(f"Visual: {item_kb['visual_features']}")
+                if item_kb.get("cultural_elements"):
+                    kb_parts.append(f"Cultural elements: {item_kb['cultural_elements']}")
+                if item_kb.get("correct_aspects"):
+                    correct = item_kb["correct_aspects"]
+                    if isinstance(correct, list):
+                        correct = "; ".join(correct[:5])
+                    kb_parts.append(f"Correct aspects: {correct}")
+                if item_kb.get("common_mistakes"):
+                    mistakes = item_kb["common_mistakes"]
+                    if isinstance(mistakes, list):
+                        mistakes = "; ".join(mistakes[:5])
+                    kb_parts.append(f"Common mistakes to check: {mistakes}")
+                if item_kb.get("key_characteristics"):
+                    kb_parts.append(f"Key characteristics: {item_kb['key_characteristics']}")
+
+                structured_ctx = "\n".join(kb_parts)
+                if context:
+                    context = structured_ctx + "\n\n" + context
+                else:
+                    context = structured_ctx
+                logger.info(f"Injected structured knowledge for {item_id} ({len(kb_parts)} fields)")
+            else:
+                logger.debug(f"No structured knowledge found for item_id={item_id}")
 
         return self.vlm.evaluate_cultural_scores(
             image_path=image_path,

@@ -782,8 +782,21 @@ ITERATION CONTEXT:
 - You should score HIGHER if improvements were made, LOWER if issues remain or got worse
 """
 
+            # Fix 6: Inject cultural knowledge context into scoring prompt
+            knowledge_section = ""
+            if context and context.strip():
+                # Truncate to avoid exceeding context window, keep most relevant
+                ctx = context.strip()[:800]
+                knowledge_section = f"""
+CULTURAL KNOWLEDGE (use this as ground truth to evaluate the image):
+{ctx}
+
+Compare the image against the above knowledge. Score LOW if the image
+contradicts or misses key elements described in the knowledge.
+"""
+
             eval_question = f"""You are a STRICT cultural expert evaluator. Rate this image on a 1-10 scale with HIGH STANDARDS.
-{iteration_context}
+{iteration_context}{knowledge_section}
 SCORING GUIDELINES:
 - 9-10: Nearly perfect, authentic {dem} cultural representation with NO significant errors
 - 7-8: Good representation with ONLY minor issues
