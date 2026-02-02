@@ -128,18 +128,36 @@ class QwenImageEditor(BaseImageEditor):
             torch_dtype=dtype,
         )
 
-        # Qwen-Image-Edit-2509 transformer alone needs ~23GB in bf16,
-        # which exceeds 24GB GPU when other models (CLIP, VLM) share memory.
-        # Use sequential CPU offload: moves individual layers to GPU one at a time,
-        # keeping peak VRAM usage low (~4-6GB) at the cost of slower inference.
+        # Qwen-Image-Edit-2509 transformer alone needs ~23GB in bf16.
+        # model_cpu_offload moves whole sub-models to GPU at once; on 24GB GPUs
+        # the transformer block alone exceeds available VRAM even with CLIP unloaded.
+        # Fix 5: Only use model_cpu_offload on 40GB+ GPUs (A100/A6000).
+        # On 24GB GPUs (RTX 3090/4090), always use sequential_cpu_offload which
+        # moves individual layers and never exceeds VRAM.
         if self.device.startswith("cuda"):
             if torch.cuda.device_count() >= 2:
                 gpu_id = 1
             else:
                 gpu_id = 0
-            self.pipe.enable_sequential_cpu_offload(gpu_id=gpu_id)
-            logger.info(f"✓ Qwen model loaded with sequential CPU offload on cuda:{gpu_id}")
+
+            free_vram_bytes, total_vram_bytes = torch.cuda.mem_get_info(gpu_id)
+            free_vram_gb = free_vram_bytes / (1024 ** 3)
+            total_vram_gb = total_vram_bytes / (1024 ** 3)
+            logger.info(f"GPU {gpu_id} VRAM: {free_vram_gb:.1f}GB free / {total_vram_gb:.1f}GB total")
+
+            # Use total VRAM to decide: model_cpu_offload only on 40GB+ GPUs
+            # where the transformer can fit entirely in VRAM during forward pass.
+            # On 24GB GPUs, sequential_cpu_offload is mandatory.
+            if total_vram_gb >= 38.0:
+                self.pipe.enable_model_cpu_offload(gpu_id=gpu_id)
+                self._offload_mode = "model_cpu_offload"
+                logger.info(f"Qwen loaded with MODEL cpu offload on cuda:{gpu_id} (fast mode, {total_vram_gb:.0f}GB GPU)")
+            else:
+                self.pipe.enable_sequential_cpu_offload(gpu_id=gpu_id)
+                self._offload_mode = "sequential_cpu_offload"
+                logger.info(f"Qwen loaded with SEQUENTIAL cpu offload on cuda:{gpu_id} (memory-safe, {total_vram_gb:.0f}GB GPU)")
         else:
+            self._offload_mode = "cpu"
             self.pipe = self.pipe.to(self.device)
 
         logger.info(f"✓ Qwen model loaded on {self.device} with {dtype}")
