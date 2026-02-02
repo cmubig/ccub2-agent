@@ -28,13 +28,19 @@ class VerificationAgent(BaseAgent):
     Based on MA-RAG / MAIN-RAG verification pattern.
     """
     
-    def __init__(self, config: AgentConfig):
+    def __init__(self, config: AgentConfig, shared_vlm_detector=None):
         super().__init__(config)
+        self._shared_vlm_detector = shared_vlm_detector
         self._vlm_client = None
         self.relevance_threshold = 0.7  # Configurable
-    
+        if shared_vlm_detector is not None:
+            logger.info("VerificationAgent: using shared VLM detector (no extra GPU load)")
+
     def _get_vlm_client(self):
-        """Lazy load VLM client."""
+        """Get VLM client - prefer shared detector to avoid OOM."""
+        if self._shared_vlm_detector is not None:
+            # VLMCulturalDetector wraps EnhancedVLMClient as self.vlm
+            return self._shared_vlm_detector.vlm
         if self._vlm_client is None:
             try:
                 from ccub2_agent.evaluation.metrics.cultural_metric.enhanced_cultural_metric_pipeline import EnhancedVLMClient
@@ -43,7 +49,7 @@ class VerificationAgent(BaseAgent):
                     load_in_4bit=True,
                     debug=self.config.verbose
                 )
-                logger.info("VLM client initialized for verification")
+                logger.info("VLM client initialized for verification (standalone)")
             except Exception as e:
                 logger.error(f"Failed to initialize VLM client: {e}")
                 raise

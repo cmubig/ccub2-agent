@@ -10,6 +10,8 @@ from typing import List, Tuple, Optional, Dict, Any
 import json
 import logging
 
+import time
+
 import numpy as np
 import torch
 from PIL import Image
@@ -55,20 +57,63 @@ class CLIPImageRAG:
 
         logger.info(f"Initializing CLIP model {model_name} on {self.device}")
 
-        # Load CLIP model and processor (use safetensors for security)
-        self.model = CLIPModel.from_pretrained(model_name, use_safetensors=True).to(self.device)
-        self.processor = CLIPProcessor.from_pretrained(model_name)
-        self.model.eval()  # Set to evaluation mode
+        # Load CLIP model and processor with retry (transient HF Hub errors)
+        self.model = None
+        self.processor = None
+        for attempt in range(3):
+            try:
+                self.model = CLIPModel.from_pretrained(model_name, use_safetensors=True).to(self.device)
+                self.processor = CLIPProcessor.from_pretrained(model_name)
+                self.model.eval()
+                break
+            except Exception as e:
+                wait = 2 ** attempt  # 1s, 2s, 4s
+                logger.warning(f"CLIP load attempt {attempt+1}/3 failed: {e}. Retrying in {wait}s...")
+                time.sleep(wait)
+                if attempt == 2:
+                    raise
 
         # Load FAISS index if provided
         self.index = None
         self.metadata = []
         self.config = {}
 
+        self._is_loaded = True  # Track whether model is on GPU
+
         if self.index_dir and self.index_dir.exists():
             self._load_index()
         else:
             logger.warning(f"No index found at {self.index_dir}")
+
+    @property
+    def is_loaded(self) -> bool:
+        """Whether the CLIP model is currently on GPU."""
+        return self._is_loaded
+
+    def unload(self):
+        """Move CLIP model to CPU and free GPU memory for other models."""
+        if not self._is_loaded:
+            logger.debug("CLIP model already unloaded")
+            return
+        try:
+            self.model.to("cpu")
+            torch.cuda.empty_cache()
+            self._is_loaded = False
+            logger.info("CLIP model unloaded from GPU → CPU (freed VRAM)")
+        except Exception as e:
+            logger.warning(f"Failed to unload CLIP model: {e}")
+
+    def reload(self):
+        """Move CLIP model back to GPU after other models are done."""
+        if self._is_loaded:
+            logger.debug("CLIP model already loaded on GPU")
+            return
+        try:
+            self.model.to(self.device)
+            self._is_loaded = True
+            logger.info(f"CLIP model reloaded to {self.device}")
+        except Exception as e:
+            logger.warning(f"Failed to reload CLIP model: {e}")
 
     def _load_index(self):
         """Load FAISS index and metadata from disk."""
@@ -108,20 +153,29 @@ class CLIPImageRAG:
         Returns:
             512-dim CLIP embedding (normalized)
         """
-        # Load and preprocess image
-        image = Image.open(image_path).convert('RGB')
-        inputs = self.processor(images=image, return_tensors="pt")
-        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+        last_error = None
+        for attempt in range(3):
+            try:
+                # Load and preprocess image
+                image = Image.open(image_path).convert('RGB')
+                inputs = self.processor(images=image, return_tensors="pt")
+                inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
-        # Get CLIP image embedding (vision_model → visual_projection → 512-dim)
-        vision_outputs = self.model.vision_model(pixel_values=inputs["pixel_values"])
-        image_embeds = self.model.visual_projection(vision_outputs.pooler_output)
+                # Get CLIP image embedding (vision_model → visual_projection → 512-dim)
+                vision_outputs = self.model.vision_model(pixel_values=inputs["pixel_values"])
+                image_embeds = self.model.visual_projection(vision_outputs.pooler_output)
 
-        # Normalize (CLIP embeddings should be normalized for cosine similarity)
-        embedding = image_embeds.cpu().numpy()[0]
-        embedding = embedding / np.linalg.norm(embedding)
+                # Normalize (CLIP embeddings should be normalized for cosine similarity)
+                embedding = image_embeds.cpu().numpy()[0]
+                embedding = embedding / np.linalg.norm(embedding)
 
-        return embedding
+                return embedding
+            except Exception as e:
+                last_error = e
+                wait = 2 ** attempt  # 1s, 2s, 4s
+                logger.warning(f"CLIP encode_image attempt {attempt+1}/3 failed: {e}. Retrying in {wait}s...")
+                time.sleep(wait)
+        raise RuntimeError(f"CLIP encode_image failed after 3 attempts: {last_error}")
 
     def retrieve_similar_images(
         self,
