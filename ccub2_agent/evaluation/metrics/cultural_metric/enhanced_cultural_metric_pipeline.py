@@ -767,6 +767,11 @@ Return ONLY a JSON object:
         previous_prompt_score: Optional[int] = None
     ) -> Tuple[int, int]:  # (cultural_representative, prompt_alignment)
         """Evaluate Cultural Representative (1-10) and Prompt Alignment (1-10) scores."""
+        # Fix 3: Seed stabilization for deterministic VLM scoring
+        import numpy as np
+        torch.manual_seed(42)
+        np.random.seed(42)
+
         try:
             # Use demonym function instead of hardcoded "Chinese"
             dem = demonym(country)
@@ -795,6 +800,7 @@ Compare the image against the above knowledge. Score LOW if the image
 contradicts or misses key elements described in the knowledge.
 """
 
+            # Fix 9: JSON output format for more reliable parsing
             eval_question = f"""You are a STRICT cultural expert evaluator. Rate this image on a 1-10 scale with HIGH STANDARDS.
 {iteration_context}{knowledge_section}
 SCORING GUIDELINES:
@@ -813,8 +819,10 @@ Examine critically:
 BE CRITICAL. If you find ANY significant errors, the score MUST be 6 or lower.
 If you find multiple severe issues, the score MUST be 4 or lower.
 
-After your analysis, end with: Cultural:X,Prompt:Y
-Example: Cultural:5,Prompt:7"""
+RESPOND IN JSON FORMAT:
+{{"cultural_score": X, "prompt_score": Y, "issues": "brief description of issues"}}
+
+Example: {{"cultural_score": 5, "prompt_score": 7, "issues": "incorrect collar style, wrong fabric pattern"}}"""
 
             # Use the exact same format as answer() function that works
             image = Image.open(image_path).convert("RGB")
@@ -852,40 +860,68 @@ Example: Cultural:5,Prompt:7"""
                 numbers_found = re.findall(r'\d+', output)
                 print(f"[DEBUG] Numbers found: {numbers_found}")
             
-            # Parse scores - try multiple formats
-            # FIXED: Better defaults and fallback logic
-            cultural_score = None  # Will be determined by parsing or text analysis
+            # Fix 9: Parse scores with JSON-first approach for reliability
+            cultural_score = None
             prompt_score = None
 
             try:
-                # Method 1: Look for Cultural:X,Prompt:Y format (strict)
-                cultural_match = re.search(r'Cultural[:\s]+(\d+)', output, re.IGNORECASE)
-                prompt_match = re.search(r'Prompt[:\s]+(\d+)', output, re.IGNORECASE)
-                
-                if cultural_match and prompt_match:
-                    cultural_score = int(cultural_match.group(1))
-                    prompt_score = int(prompt_match.group(1))
-                    if self.debug:
-                        print(f"[DEBUG] Method 1 (regex) - Cultural:{cultural_score}, Prompt:{prompt_score}")
-                # Method 2: Look for any two numbers
-                elif len(numbers_found) >= 2:
-                    cultural_score = int(numbers_found[0])
-                    prompt_score = int(numbers_found[1])
-                    if self.debug:
-                        print(f"[DEBUG] Method 2 (numbers) - Cultural:{cultural_score}, Prompt:{prompt_score}")
-                # Method 3: Look for comma-separated numbers
-                elif ',' in output:
-                    parts = output.split(',')
-                    if len(parts) >= 2:
-                        cultural_nums = re.findall(r'\d+', parts[0])
-                        prompt_nums = re.findall(r'\d+', parts[1])
-                        if cultural_nums and prompt_nums:
-                            cultural_score = int(cultural_nums[0])
-                            prompt_score = int(prompt_nums[0])
+                # Method 0 (NEW - Fix 9): Try JSON parsing first
+                json_match = re.search(r'\{[^}]+\}', output)
+                if json_match:
+                    try:
+                        import json
+                        score_json = json.loads(json_match.group())
+                        if 'cultural_score' in score_json and 'prompt_score' in score_json:
+                            cultural_score = int(score_json['cultural_score'])
+                            prompt_score = int(score_json['prompt_score'])
                             if self.debug:
-                                print(f"[DEBUG] Method 3 (comma) - Cultural:{cultural_score}, Prompt:{prompt_score}")
+                                print(f"[DEBUG] Method 0 (JSON) - Cultural:{cultural_score}, Prompt:{prompt_score}")
+                    except (json.JSONDecodeError, KeyError, ValueError):
+                        pass  # Fall through to other methods
 
-                # FIXED: Fallback - infer from text analysis if parsing failed
+                # Method 1: Look for Cultural:X,Prompt:Y format (strict)
+                if cultural_score is None or prompt_score is None:
+                    cultural_match = re.search(r'Cultural[:\s]+(\d+)', output, re.IGNORECASE)
+                    prompt_match = re.search(r'Prompt[:\s]+(\d+)', output, re.IGNORECASE)
+
+                    if cultural_match and prompt_match:
+                        cultural_score = int(cultural_match.group(1))
+                        prompt_score = int(prompt_match.group(1))
+                        if self.debug:
+                            print(f"[DEBUG] Method 1 (regex) - Cultural:{cultural_score}, Prompt:{prompt_score}")
+
+                # Method 2: Look for cultural_score/prompt_score keys (JSON-like but not valid JSON)
+                if cultural_score is None or prompt_score is None:
+                    cultural_key_match = re.search(r'cultural_score["\s:]+(\d+)', output, re.IGNORECASE)
+                    prompt_key_match = re.search(r'prompt_score["\s:]+(\d+)', output, re.IGNORECASE)
+                    if cultural_key_match and prompt_key_match:
+                        cultural_score = int(cultural_key_match.group(1))
+                        prompt_score = int(prompt_key_match.group(1))
+                        if self.debug:
+                            print(f"[DEBUG] Method 2 (key-value) - Cultural:{cultural_score}, Prompt:{prompt_score}")
+
+                # Method 3: Look for any two numbers
+                if cultural_score is None or prompt_score is None:
+                    if len(numbers_found) >= 2:
+                        cultural_score = int(numbers_found[0])
+                        prompt_score = int(numbers_found[1])
+                        if self.debug:
+                            print(f"[DEBUG] Method 3 (numbers) - Cultural:{cultural_score}, Prompt:{prompt_score}")
+
+                # Method 4: Look for comma-separated numbers
+                if cultural_score is None or prompt_score is None:
+                    if ',' in output:
+                        parts = output.split(',')
+                        if len(parts) >= 2:
+                            cultural_nums = re.findall(r'\d+', parts[0])
+                            prompt_nums = re.findall(r'\d+', parts[1])
+                            if cultural_nums and prompt_nums:
+                                cultural_score = int(cultural_nums[0])
+                                prompt_score = int(prompt_nums[0])
+                                if self.debug:
+                                    print(f"[DEBUG] Method 4 (comma) - Cultural:{cultural_score}, Prompt:{prompt_score}")
+
+                # Fallback: infer from text analysis if parsing failed
                 if cultural_score is None or prompt_score is None:
                     output_lower = output.lower()
                     # Positive indicators
@@ -906,7 +942,7 @@ Example: Cultural:5,Prompt:7"""
                         prompt_score = prompt_score or 5
                         if self.debug:
                             print(f"[DEBUG] No clear sentiment, using default 5/10")
-                
+
                 # Clamp to valid range (1-10 scale)
                 if self.debug:
                     print(f"[DEBUG] Before clamping: cultural={cultural_score}, prompt={prompt_score}")

@@ -5,6 +5,7 @@ Scout Agent - Detects coverage gaps and failure modes.
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 import logging
+import hashlib
 
 from ..base_agent import BaseAgent, AgentConfig, AgentResult
 from ...data.gap_analyzer import DataGapAnalyzer
@@ -39,6 +40,23 @@ class ScoutAgent(BaseAgent):
         self.index_base = index_base or DEFAULT_INDEX_BASE
         self._clip_rag: Optional[CLIPImageRAG] = shared_clip_rag
 
+        # Fix 10: Reference caching to avoid re-retrieval after rollback
+        self._reference_cache: Dict[str, List[Dict[str, Any]]] = {}
+
+    def _get_image_hash(self, image_path: str) -> str:
+        """Get a hash of the image for caching purposes."""
+        # Use file path + modification time as a simple hash
+        path = Path(image_path)
+        if path.exists():
+            mtime = path.stat().st_mtime
+            return hashlib.md5(f"{image_path}:{mtime}".encode()).hexdigest()[:16]
+        return hashlib.md5(image_path.encode()).hexdigest()[:16]
+
+    def clear_cache(self):
+        """Clear the reference cache (call when starting a new image)."""
+        self._reference_cache.clear()
+        logger.debug("Scout reference cache cleared")
+
     def _get_clip_rag(self, country: str) -> Optional[CLIPImageRAG]:
         """Get or initialize CLIP RAG for the specified country."""
         index_dir = self.index_base / country
@@ -61,7 +79,16 @@ class ScoutAgent(BaseAgent):
         category: Optional[str] = None,
         k: int = 5
     ) -> List[Dict[str, Any]]:
-        """Retrieve reference images using CLIP RAG."""
+        """Retrieve reference images using CLIP RAG with caching (Fix 10)."""
+        # Fix 10: Check cache first
+        image_hash = self._get_image_hash(image_path)
+        cache_key = f"{image_hash}:{country}:{category or 'all'}"
+
+        if cache_key in self._reference_cache:
+            cached_refs = self._reference_cache[cache_key]
+            logger.info(f"Using cached references ({len(cached_refs)} refs) for {country}/{category}")
+            return cached_refs
+
         clip_rag = self._get_clip_rag(country)
 
         if clip_rag is None:
@@ -74,6 +101,10 @@ class ScoutAgent(BaseAgent):
                 category=category
             )
             logger.info(f"Retrieved {len(references)} references for {country}/{category}")
+
+            # Fix 10: Cache the results
+            self._reference_cache[cache_key] = references
+
             return references
         except Exception as e:
             logger.error(f"Reference retrieval failed: {e}")

@@ -627,9 +627,10 @@ Now analyze this image:"""
         previous_cultural_score: Optional[int] = None,
         previous_prompt_score: Optional[int] = None,
         category: Optional[str] = None,
+        n_passes: int = 3,  # Fix 8: Multi-pass voting
     ) -> Tuple[int, int]:
         """
-        Get cultural quality scores.
+        Get cultural quality scores with multi-pass voting for stability.
 
         Args:
             image_path: Path to image
@@ -639,6 +640,7 @@ Now analyze this image:"""
             iteration_number: Current iteration number for context
             previous_cultural_score: Previous cultural score for comparison
             previous_prompt_score: Previous prompt score for comparison
+            n_passes: Number of scoring passes for voting (Fix 8)
 
         Returns:
             Tuple of (cultural_representative, prompt_alignment) scores (1-10)
@@ -691,16 +693,45 @@ Now analyze this image:"""
             else:
                 logger.debug(f"No structured knowledge found for item_id={item_id}")
 
-        return self.vlm.evaluate_cultural_scores(
-            image_path=image_path,
-            prompt=prompt,
-            editing_prompt=editing_prompt or "",
-            context=context,
-            country=country,
-            iteration_number=iteration_number,
-            previous_cultural_score=previous_cultural_score,
-            previous_prompt_score=previous_prompt_score,
-        )
+        # Fix 8: Multi-pass voting for scoring stability
+        if n_passes > 1:
+            cultural_scores = []
+            prompt_scores = []
+
+            for pass_idx in range(n_passes):
+                c_score, p_score = self.vlm.evaluate_cultural_scores(
+                    image_path=image_path,
+                    prompt=prompt,
+                    editing_prompt=editing_prompt or "",
+                    context=context,
+                    country=country,
+                    iteration_number=iteration_number,
+                    previous_cultural_score=previous_cultural_score,
+                    previous_prompt_score=previous_prompt_score,
+                )
+                cultural_scores.append(c_score)
+                prompt_scores.append(p_score)
+
+            # Use median for stability (robust to outliers)
+            import statistics
+            cultural_score = int(statistics.median(cultural_scores))
+            prompt_score = int(statistics.median(prompt_scores))
+
+            if self.debug:
+                logger.info(f"Multi-pass voting: cultural={cultural_scores}→{cultural_score}, prompt={prompt_scores}→{prompt_score}")
+
+            return cultural_score, prompt_score
+        else:
+            return self.vlm.evaluate_cultural_scores(
+                image_path=image_path,
+                prompt=prompt,
+                editing_prompt=editing_prompt or "",
+                context=context,
+                country=country,
+                iteration_number=iteration_number,
+                previous_cultural_score=previous_cultural_score,
+                previous_prompt_score=previous_prompt_score,
+            )
 
     def _deduplicate_vlm_analysis(self, text: str) -> str:
         """Remove duplicate/repetitive lines from VLM hallucination."""

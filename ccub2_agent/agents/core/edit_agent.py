@@ -71,6 +71,25 @@ class EditAgent(BaseAgent):
 
         return instruction
 
+    def _get_adaptive_strength(self, cultural_score: float) -> float:
+        """
+        Fix 5: Calculate adaptive edit strength based on current cultural score.
+
+        Lower scores need stronger edits, higher scores need gentler preservation.
+
+        Args:
+            cultural_score: Current cultural score (1-10)
+
+        Returns:
+            Edit strength (0.0-1.0)
+        """
+        if cultural_score <= 4:
+            return 0.65  # Severe issues → strong editing
+        elif cultural_score <= 6:
+            return 0.55  # Moderate issues → medium editing
+        else:
+            return 0.40  # Minor issues → gentle editing
+
     def execute(self, input_data: Dict[str, Any]) -> AgentResult:
         """
         Edit image using I2I model.
@@ -84,7 +103,9 @@ class EditAgent(BaseAgent):
                 "country": str,
                 "category": str (optional),
                 "item_knowledge": Dict (optional, Fix 7),
-                "model": str (optional)
+                "model": str (optional),
+                "cultural_score": float (optional, for adaptive strength),
+                "iteration_number": int (optional, Fix 7)
             }
 
         Returns:
@@ -98,6 +119,9 @@ class EditAgent(BaseAgent):
             model_type = input_data.get("model", self.i2i_model)
             item_knowledge = input_data.get("item_knowledge")
             category = input_data.get("category", self.config.category or "traditional_clothing")
+            # Fix 5 & 7: New parameters
+            cultural_score = input_data.get("cultural_score", 5.0)  # Default to mid-range
+            iteration_number = input_data.get("iteration_number", 0)
 
             # Fix 7: Build cultural context from structured knowledge
             knowledge_ctx = self._build_knowledge_context(item_knowledge)
@@ -138,12 +162,16 @@ class EditAgent(BaseAgent):
                 if ref_path.exists():
                     ref_image = Image.open(ref_path)
 
-            # Edit
+            # Fix 5: Calculate adaptive strength based on cultural score
+            adaptive_strength = self._get_adaptive_strength(cultural_score)
+            logger.info(f"Using adaptive strength {adaptive_strength:.2f} for score {cultural_score:.1f} (iteration {iteration_number})")
+
+            # Edit with adaptive strength
             edited_image = i2i_adapter.edit(
                 image=image,
                 instruction=editing_prompt,
                 reference_image=ref_image,
-                strength=0.35  # Lower strength for better preservation
+                strength=adaptive_strength
             )
 
             # Save edited image

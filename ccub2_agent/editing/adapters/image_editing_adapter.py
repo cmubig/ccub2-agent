@@ -244,9 +244,9 @@ class QwenImageEditor(BaseImageEditor):
 
         num_steps = kwargs.get('num_inference_steps', 40)
 
-        # CFG scale: Moderate value for balanced editing
-        # 3.0 for subtle, composition-preserving edits
-        default_cfg = 3.0
+        # CFG scale: Fix 1 - Increased from 3.0 to 5.0 for stronger instruction following
+        # Higher value ensures model follows cultural correction instructions more strongly
+        default_cfg = 5.0
 
         params = {
             'image': image_input,
@@ -1111,7 +1111,7 @@ class Flux2Editor(BaseImageEditor):
             'prompt': instruction,
             'image': image_list,
             'num_inference_steps': num_steps,
-            'guidance_scale': kwargs.get('guidance_scale', 4.0),
+            'guidance_scale': kwargs.get('guidance_scale', 6.0),  # Fix 1: Increased from 4.0 to 6.0
             'generator': torch.Generator(device='cpu').manual_seed(kwargs.get('seed', 42)),
         }
 

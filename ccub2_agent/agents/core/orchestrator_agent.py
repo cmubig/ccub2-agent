@@ -10,6 +10,9 @@ from typing import Dict, Any, List, Optional
 import logging
 from pathlib import Path
 import time
+import gc
+
+import torch
 
 from ..base_agent import BaseAgent, AgentConfig, AgentResult
 from .scout_agent import ScoutAgent
@@ -19,6 +22,27 @@ from .job_agent import JobAgent
 from .verification_agent import VerificationAgent
 
 logger = logging.getLogger(__name__)
+
+
+def _get_free_vram_gb(gpu_id: int = 1) -> float:
+    """Get free VRAM in GB for the specified GPU (Fix 11)."""
+    if not torch.cuda.is_available():
+        return float('inf')  # No GPU constraints
+    try:
+        free_bytes, _ = torch.cuda.mem_get_info(gpu_id)
+        return free_bytes / (1024 ** 3)
+    except Exception:
+        return float('inf')  # Assume plenty of memory if we can't check
+
+# Rollback + Edit Skip constants
+EDIT_SKIP_THRESHOLD = 7.0  # Skip editing if score >= this threshold
+MAX_CONSECUTIVE_DROPS = 4  # Fix 2: Increased from 2 to 4 for more recovery attempts
+
+# Fix 11: VRAM threshold for conditional CLIP unloading (in GB)
+VRAM_THRESHOLD_GB = 20.0  # Only unload CLIP if free VRAM is below this
+
+# Fix 12: Edit retry parameters
+MAX_EDIT_RETRIES = 3  # Number of retry attempts for edit failures
 
 # Project data dirs
 _PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
@@ -84,6 +108,7 @@ class OrchestratorAgent(BaseAgent):
         self.max_iterations = 5
         self.score_threshold = 8.0
         self.score_history: List[float] = []
+        self.consecutive_drops: int = 0  # Track consecutive score drops for rollback
 
     def execute(self, input_data: Dict[str, Any]) -> AgentResult:
         """
@@ -108,16 +133,24 @@ class OrchestratorAgent(BaseAgent):
             self.max_iterations = input_data.get("max_iterations", 5)
             self.score_threshold = input_data.get("score_threshold", 8.0)
             self.score_history = []
+            self.consecutive_drops = 0
 
             current_image = Path(input_data["image_path"])
             prompt = input_data["prompt"]
 
+            # Fix 10: Clear scout reference cache for new image
+            self.scout_agent.clear_cache()
+
             # Phase 1: Initial evaluation
+            # Fix 4: Reset judge momentum for new image sequence
+            self.judge_agent.reset_momentum()
+
             judge_input = {
                 "image_path": str(current_image),
                 "prompt": prompt,
                 "country": self.config.country,
-                "category": input_data.get("category")
+                "category": input_data.get("category"),
+                "reset_momentum": True  # First evaluation resets momentum
             }
 
             judge_result = self.judge_agent.execute(judge_input)
@@ -138,6 +171,11 @@ class OrchestratorAgent(BaseAgent):
                 # Check termination conditions
                 if cultural_score >= self.score_threshold:
                     logger.info(f"Target score reached at iteration {iteration}")
+                    break
+
+                # Edit Skip: Don't edit images that are already good enough
+                if cultural_score >= EDIT_SKIP_THRESHOLD:
+                    logger.info(f"Score {cultural_score:.1f} >= {EDIT_SKIP_THRESHOLD}, skipping edit (already good)")
                     break
 
                 # Phase 3: Gap detection + Reference retrieval
@@ -176,9 +214,15 @@ class OrchestratorAgent(BaseAgent):
                         references = verification_result.data.get("verified_references", [])
                         logger.info(f"Verified {len(references)} references (filtered {verification_result.data.get('filtered_count', 0)})")
 
-                # Phase 5: Edit — free GPU 1 VRAM by unloading CLIP first
-                if self.clip_rag is not None:
+                # Phase 5: Edit — Fix 11: Only unload CLIP if VRAM is low
+                clip_was_unloaded = False
+                free_vram = _get_free_vram_gb(gpu_id=1)
+                if self.clip_rag is not None and free_vram < VRAM_THRESHOLD_GB:
+                    logger.info(f"Free VRAM {free_vram:.1f}GB < {VRAM_THRESHOLD_GB}GB, unloading CLIP")
                     self.clip_rag.unload()
+                    clip_was_unloaded = True
+                else:
+                    logger.debug(f"Free VRAM {free_vram:.1f}GB >= {VRAM_THRESHOLD_GB}GB, keeping CLIP loaded")
 
                 # Fix 7: Pass structured knowledge to Edit for targeted corrections
                 item_knowledge = None
@@ -194,27 +238,76 @@ class OrchestratorAgent(BaseAgent):
                     "country": self.config.country,
                     "category": input_data.get("category"),
                     "item_knowledge": item_knowledge,
+                    # Fix 5 & 7: Pass cultural score and iteration for adaptive editing
+                    "cultural_score": cultural_score,
+                    "iteration_number": iteration,
                 }
-                edit_result = self.edit_agent.execute(edit_input)
 
-                # Reload CLIP after edit completes (needed for next iteration's retrieval)
-                if self.clip_rag is not None:
+                # Fix 12: Edit with retry logic for OOM handling
+                edit_result = None
+                for attempt in range(MAX_EDIT_RETRIES):
+                    try:
+                        edit_result = self.edit_agent.execute(edit_input)
+                        if edit_result.success:
+                            break
+                        # Non-OOM failure, don't retry
+                        if "out of memory" not in edit_result.message.lower():
+                            break
+                    except RuntimeError as e:
+                        if "out of memory" in str(e).lower():
+                            logger.warning(f"Edit OOM at attempt {attempt + 1}/{MAX_EDIT_RETRIES}, clearing cache...")
+                            torch.cuda.empty_cache()
+                            gc.collect()
+                            # Force unload CLIP on OOM
+                            if self.clip_rag is not None and not clip_was_unloaded:
+                                self.clip_rag.unload()
+                                clip_was_unloaded = True
+                            continue
+                        raise
+
+                # Reload CLIP if it was unloaded (needed for next iteration's retrieval)
+                if clip_was_unloaded and self.clip_rag is not None:
                     self.clip_rag.reload()
 
-                if not edit_result.success:
-                    logger.warning(f"Edit failed at iteration {iteration}")
+                if edit_result is None or not edit_result.success:
+                    logger.warning(f"Edit failed at iteration {iteration} after {MAX_EDIT_RETRIES} attempts")
                     break
 
-                current_image = Path(edit_result.data["output_image"])
+                edited_image = Path(edit_result.data["output_image"])
 
                 # Phase 6: Re-evaluation
-                judge_input["image_path"] = str(current_image)
+                judge_input["image_path"] = str(edited_image)
                 judge_result = self.judge_agent.execute(judge_input)
 
                 if not judge_result.success:
                     break
 
-                cultural_score = judge_result.data.get("cultural_score", 0)
+                new_score = judge_result.data.get("cultural_score", 0)
+                prev_score = self.score_history[-1]
+
+                # Rollback: If score dropped, keep the previous image
+                if new_score < prev_score:
+                    self.consecutive_drops += 1
+                    logger.warning(
+                        f"Score dropped {prev_score:.1f} → {new_score:.1f}, "
+                        f"rolling back (consecutive drops: {self.consecutive_drops})"
+                    )
+
+                    # Stop if too many consecutive drops
+                    if self.consecutive_drops >= MAX_CONSECUTIVE_DROPS:
+                        logger.info(
+                            f"{MAX_CONSECUTIVE_DROPS} consecutive drops, stopping loop early"
+                        )
+                        break
+
+                    # Don't update current_image (rollback), but record the drop
+                    self.score_history.append(prev_score)  # Keep tracking with prev score
+                    continue
+
+                # Score improved or stayed same: accept the edit
+                self.consecutive_drops = 0
+                current_image = edited_image
+                cultural_score = new_score
                 self.score_history.append(cultural_score)
 
             # Final result
